@@ -22,7 +22,13 @@ func NewHandler(hub *Hub, jwtManager *auth.JWTManager) *Handler {
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
 			CheckOrigin: func(r *http.Request) bool {
-				return true
+				origin := r.Header.Get("Origin")
+				switch origin {
+				case "http://localhost:3000":
+					return true
+				default:
+					return false
+				}
 			},
 		},
 	}
