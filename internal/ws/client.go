@@ -42,7 +42,6 @@ func (c *Client) readPump() {
 	defer func() {
 		for gameID := range c.gameIDs {
 			_ = c.gameService.LeaveGame(gameID, c.userID)
-
 			c.broadcastGameState(gameID)
 		}
 
@@ -163,7 +162,7 @@ func (c *Client) handleGameMove(msg IncomingMessage) {
 		return
 	}
 
-	state, err := c.gameService.MakeMove(payload.GameID, c.userID, payload.Move)
+	state, result, err := c.gameService.MakeMove(payload.GameID, c.userID, payload.Move)
 	if err != nil {
 		c.sendGameError(msg.RequestID, err)
 		return
@@ -182,6 +181,48 @@ func (c *Client) handleGameMove(msg IncomingMessage) {
 		Type:    "game.state",
 		Payload: state,
 	})
+
+	if result.IsCapture {
+		c.broadcastJSON(payload.GameID, OutgoingMessage{
+			Type: "game.event.capture",
+			Payload: map[string]string{
+				"game_id":    payload.GameID,
+				"by_user_id": c.userID,
+				"move":       result.Move,
+			},
+		})
+	}
+
+	if result.IsCheck {
+		c.broadcastJSON(payload.GameID, OutgoingMessage{
+			Type: "game.event.check",
+			Payload: map[string]string{
+				"game_id":    payload.GameID,
+				"by_user_id": c.userID,
+				"move":       result.Move,
+			},
+		})
+	}
+
+	if result.IsCheckmate {
+		c.broadcastJSON(payload.GameID, OutgoingMessage{
+			Type: "game.event.checkmate",
+			Payload: map[string]string{
+				"game_id":    payload.GameID,
+				"by_user_id": c.userID,
+				"move":       result.Move,
+			},
+		})
+
+		c.broadcastJSON(payload.GameID, OutgoingMessage{
+			Type: "game.finished",
+			Payload: map[string]string{
+				"game_id":         payload.GameID,
+				"winner_id":       state.WinnerID,
+				"finished_reason": state.FinishedReason,
+			},
+		})
+	}
 }
 
 func (c *Client) broadcastGameState(gameID string) {
