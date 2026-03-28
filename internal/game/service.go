@@ -23,6 +23,10 @@ type State struct {
 	Player2Connected  bool   `json:"player2_connected"`
 	Status            string `json:"status"`
 	CurrentTurnUserID string `json:"current_turn_user_id"`
+	FEN               string `json:"fen"`
+	LastMove          string `json:"last_move"`
+	WinnerID          string `json:"winner_id,omitempty"`
+	FinishedReason    string `json:"finished_reason,omitempty"`
 	Moves             []Move `json:"moves"`
 }
 
@@ -37,11 +41,11 @@ func NewService() *Service {
 	}
 }
 
-func (s *Service) CreateGame(gameID, player1ID, player2ID string) *Session {
+func (s *Service) CreateGame(gameID, player1ID, player2ID string, engine Engine) *Session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	session := NewSession(gameID, player1ID, player2ID)
+	session := NewSession(gameID, player1ID, player2ID, engine)
 	s.sessions[gameID] = session
 	return session
 }
@@ -81,16 +85,16 @@ func (s *Service) LeaveGame(gameID, userID string) error {
 	return nil
 }
 
-func (s *Service) MakeMove(gameID, userID, move string) (State, error) {
+func (s *Service) MakeMove(gameID, userID, move string) (State, MoveResult, error) {
 	session, ok := s.GetSession(gameID)
 	if !ok {
-		return State{}, ErrGameNotFound
+		return State{}, MoveResult{}, ErrGameNotFound
 	}
 	if !session.HasPlayer(userID) {
-		return State{}, ErrForbidden
+		return State{}, MoveResult{}, ErrForbidden
 	}
 	if move == "" {
-		return State{}, ErrInvalidMove
+		return State{}, MoveResult{}, ErrInvalidMove
 	}
 
 	return session.ApplyMove(userID, move)

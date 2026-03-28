@@ -11,9 +11,13 @@ const (
 )
 
 type Move struct {
-	Number int    `json:"number"`
-	UserID string `json:"user_id"`
-	Move   string `json:"move"`
+	Number      int    `json:"number"`
+	UserID      string `json:"user_id"`
+	Move        string `json:"move"`
+	FEN         string `json:"fen"`
+	IsCapture   bool   `json:"is_capture"`
+	IsCheck     bool   `json:"is_check"`
+	IsCheckmate bool   `json:"is_checkmate"`
 }
 
 type Session struct {
@@ -31,19 +35,26 @@ type Session struct {
 
 	CurrentTurnUserID string `json:"current_turn_user_id"`
 
+	FEN            string `json:"fen"`
+	LastMove       string `json:"last_move"`
+	WinnerID       string `json:"winner_id,omitempty"`
+	FinishedReason string `json:"finished_reason,omitempty"`
+
 	Moves []Move `json:"moves"`
+
+	engine Engine
 }
 
-func NewSession(gameID, player1ID, player2ID string) *Session {
+func NewSession(gameID, player1ID, player2ID string, engine Engine) *Session {
 	return &Session{
 		GameID:            gameID,
 		Player1ID:         player1ID,
 		Player2ID:         player2ID,
 		Status:            StatusWaiting,
 		CurrentTurnUserID: player1ID,
-		Moves:             make([]Move, 0, 64),
-		Player1Connected:  false,
-		Player2Connected:  false,
+		FEN:               engine.CurrentFEN(),
+		Moves:             make([]Move, 0, 128),
+		engine:            engine,
 	}
 }
 
@@ -82,35 +93,57 @@ func (s *Session) Snapshot() State {
 		Player2Connected:  s.Player2Connected,
 		Status:            string(s.Status),
 		CurrentTurnUserID: s.CurrentTurnUserID,
+		FEN:               s.FEN,
+		LastMove:          s.LastMove,
+		WinnerID:          s.WinnerID,
+		FinishedReason:    s.FinishedReason,
 		Moves:             moves,
 	}
 }
 
-func (s *Session) ApplyMove(userID, move string) (State, error) {
+func (s *Session) ApplyMove(userID, move string) (State, MoveResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.Status == StatusFinished {
-		return State{}, ErrGameFinished
+		return State{}, MoveResult{}, ErrGameFinished
 	}
 	if s.Status != StatusActive {
-		return State{}, ErrGameNotActive
+		return State{}, MoveResult{}, ErrGameNotActive
 	}
 	if userID != s.CurrentTurnUserID {
-		return State{}, ErrNotYourTurn
+		return State{}, MoveResult{}, ErrNotYourTurn
+	}
+
+	result, err := s.engine.ApplyMove(move)
+	if err != nil {
+		return State{}, MoveResult{}, ErrInvalidMove
 	}
 
 	nextMove := Move{
-		Number: len(s.Moves) + 1,
-		UserID: userID,
-		Move:   move,
+		Number:      len(s.Moves) + 1,
+		UserID:      userID,
+		Move:        result.Move,
+		FEN:         result.FEN,
+		IsCapture:   result.IsCapture,
+		IsCheck:     result.IsCheck,
+		IsCheckmate: result.IsCheckmate,
 	}
-	s.Moves = append(s.Moves, nextMove)
 
-	if s.CurrentTurnUserID == s.Player1ID {
-		s.CurrentTurnUserID = s.Player2ID
+	s.Moves = append(s.Moves, nextMove)
+	s.FEN = result.FEN
+	s.LastMove = result.Move
+
+	if result.IsCheckmate {
+		s.Status = StatusFinished
+		s.WinnerID = userID
+		s.FinishedReason = "checkmate"
 	} else {
-		s.CurrentTurnUserID = s.Player1ID
+		if s.CurrentTurnUserID == s.Player1ID {
+			s.CurrentTurnUserID = s.Player2ID
+		} else {
+			s.CurrentTurnUserID = s.Player1ID
+		}
 	}
 
 	moves := make([]Move, len(s.Moves))
@@ -124,6 +157,10 @@ func (s *Session) ApplyMove(userID, move string) (State, error) {
 		Player2Connected:  s.Player2Connected,
 		Status:            string(s.Status),
 		CurrentTurnUserID: s.CurrentTurnUserID,
+		FEN:               s.FEN,
+		LastMove:          s.LastMove,
+		WinnerID:          s.WinnerID,
+		FinishedReason:    s.FinishedReason,
 		Moves:             moves,
-	}, nil
+	}, result, nil
 }
