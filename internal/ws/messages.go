@@ -24,7 +24,7 @@ type JoinGamePayload struct {
 	GameID string `json:"game_id"`
 }
 
-type GameMessagePayload struct {
-	GameID  string `json:"game_id"`
-	Message string `json:"message"`
+type GameMovePayload struct {
+	GameID string `json:"game_id"`
+	Move   string `json:"move"`
 }

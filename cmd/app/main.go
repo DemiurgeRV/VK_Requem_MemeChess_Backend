@@ -7,32 +7,37 @@ import (
 
 	"meme_chess/internal/auth"
 	"meme_chess/internal/config"
+	"meme_chess/internal/game"
 	"meme_chess/internal/ws"
 )
 
-func withCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
-}
+//func withCORS(next http.Handler) http.Handler {
+//	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+//		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
+//		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+//		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+//
+//		if r.Method == http.MethodOptions {
+//			w.WriteHeader(http.StatusOK)
+//			return
+//		}
+//
+//		next.ServeHTTP(w, r)
+//	})
+//}
 
 func main() {
 	cfg := config.Load()
 
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret)
 	hub := ws.NewHub()
-	wsHandler := ws.NewHandler(hub, jwtManager)
+	gameService := game.NewService()
+	wsHandler := ws.NewHandler(hub, gameService, jwtManager)
 
 	go hub.Run()
+
+	// Тестовая игра между двумя пользователями
+	gameService.CreateGame("room-1", "1", "2")
 
 	http.HandleFunc("/ws", wsHandler.ServeWS)
 
@@ -54,6 +59,17 @@ func main() {
 		})
 	})
 
+	http.HandleFunc("/debug/game", func(w http.ResponseWriter, r *http.Request) {
+		session, ok := gameService.GetSession("game-123")
+		if !ok {
+			http.Error(w, "game not found", http.StatusNotFound)
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(session.Snapshot())
+	})
+
 	log.Printf("server started on :%s", cfg.HTTPPort)
-	log.Fatal(http.ListenAndServe(":"+cfg.HTTPPort, withCORS(http.DefaultServeMux)))
+	//log.Fatal(http.ListenAndServe(":"+cfg.HTTPPort, withCORS(http.DefaultServeMux)))
+	log.Fatal(http.ListenAndServe(":"+cfg.HTTPPort, nil))
 }

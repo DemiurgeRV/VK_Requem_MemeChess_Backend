@@ -4,31 +4,28 @@ import (
 	"net/http"
 
 	"meme_chess/internal/auth"
+	"meme_chess/internal/game"
 
 	"github.com/gorilla/websocket"
 )
 
 type Handler struct {
-	hub        *Hub
-	jwtManager *auth.JWTManager
-	upgrader   websocket.Upgrader
+	hub         *Hub
+	gameService *game.Service
+	jwtManager  *auth.JWTManager
+	upgrader    websocket.Upgrader
 }
 
-func NewHandler(hub *Hub, jwtManager *auth.JWTManager) *Handler {
+func NewHandler(hub *Hub, gameService *game.Service, jwtManager *auth.JWTManager) *Handler {
 	return &Handler{
-		hub:        hub,
-		jwtManager: jwtManager,
+		hub:         hub,
+		gameService: gameService,
+		jwtManager:  jwtManager,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
 			CheckOrigin: func(r *http.Request) bool {
-				origin := r.Header.Get("Origin")
-				switch origin {
-				case "http://localhost:3000":
-					return true
-				default:
-					return false
-				}
+				return true
 			},
 		},
 	}
@@ -52,7 +49,7 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := NewClient(h.hub, conn, claims.UserID)
+	client := NewClient(h.hub, h.gameService, conn, claims.UserID)
 	h.hub.register <- client
 
 	go client.writePump()

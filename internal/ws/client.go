@@ -2,8 +2,11 @@ package ws
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"time"
+
+	"meme_chess/internal/game"
 
 	"github.com/gorilla/websocket"
 )
@@ -16,25 +19,33 @@ const (
 )
 
 type Client struct {
-	hub     *Hub
-	conn    *websocket.Conn
-	send    chan []byte
-	userID  string
-	gameIDs map[string]struct{}
+	hub         *Hub
+	gameService *game.Service
+	conn        *websocket.Conn
+	send        chan []byte
+	userID      string
+	gameIDs     map[string]struct{}
 }
 
-func NewClient(hub *Hub, conn *websocket.Conn, userID string) *Client {
+func NewClient(hub *Hub, gameService *game.Service, conn *websocket.Conn, userID string) *Client {
 	return &Client{
-		hub:     hub,
-		conn:    conn,
-		send:    make(chan []byte, 256),
-		userID:  userID,
-		gameIDs: make(map[string]struct{}),
+		hub:         hub,
+		gameService: gameService,
+		conn:        conn,
+		send:        make(chan []byte, 256),
+		userID:      userID,
+		gameIDs:     make(map[string]struct{}),
 	}
 }
 
 func (c *Client) readPump() {
 	defer func() {
+		for gameID := range c.gameIDs {
+			_ = c.gameService.LeaveGame(gameID, c.userID)
+
+			c.broadcastGameState(gameID)
+		}
+
 		c.hub.unregister <- c
 		_ = c.conn.Close()
 	}()
@@ -94,66 +105,128 @@ func (c *Client) writePump() {
 func (c *Client) handleIncomingMessage(msg IncomingMessage) {
 	switch msg.Type {
 	case "game.join":
-		var payload JoinGamePayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-			c.sendError(msg.RequestID, "BAD_REQUEST", "invalid join payload")
-			return
-		}
+		c.handleJoinGame(msg)
 
-		if payload.GameID == "" {
-			c.sendError(msg.RequestID, "BAD_REQUEST", "game_id is required")
-			return
-		}
-
-		c.hub.joinRoom <- subscription{
-			client: c,
-			gameID: payload.GameID,
-		}
-
-		c.sendJSON(OutgoingMessage{
-			Type:      "game.joined",
-			RequestID: msg.RequestID,
-			Payload: map[string]string{
-				"game_id": payload.GameID,
-				"user_id": c.userID,
-			},
-		})
-
-	case "game.message":
-		var payload GameMessagePayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-			c.sendError(msg.RequestID, "BAD_REQUEST", "invalid game message payload")
-			return
-		}
-
-		if payload.GameID == "" {
-			c.sendError(msg.RequestID, "BAD_REQUEST", "game_id is required")
-			return
-		}
-
-		out := OutgoingMessage{
-			Type: "game.message",
-			Payload: map[string]string{
-				"game_id": payload.GameID,
-				"user_id": c.userID,
-				"message": payload.Message,
-			},
-		}
-
-		data, err := json.Marshal(out)
-		if err != nil {
-			log.Println("marshal error:", err)
-			c.sendError(msg.RequestID, "INTERNAL_ERROR", "failed to build response")
-			return
-		}
-
-		c.hub.broadcast <- BroadcastMessage{
-			GameID:  payload.GameID,
-			Payload: data,
-		}
+	case "game.move":
+		c.handleGameMove(msg)
 
 	default:
 		c.sendError(msg.RequestID, "UNKNOWN_TYPE", "unknown message type")
+	}
+}
+
+func (c *Client) handleJoinGame(msg IncomingMessage) {
+	var payload JoinGamePayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "invalid join payload")
+		return
+	}
+
+	if payload.GameID == "" {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "game_id is required")
+		return
+	}
+
+	state, err := c.gameService.JoinGame(payload.GameID, c.userID)
+	if err != nil {
+		c.sendGameError(msg.RequestID, err)
+		return
+	}
+
+	c.hub.joinRoom <- subscription{
+		client: c,
+		gameID: payload.GameID,
+	}
+
+	c.sendJSON(OutgoingMessage{
+		Type:      "game.joined",
+		RequestID: msg.RequestID,
+		Payload:   state,
+	})
+
+	c.broadcastGameState(payload.GameID)
+}
+
+func (c *Client) handleGameMove(msg IncomingMessage) {
+	var payload GameMovePayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "invalid move payload")
+		return
+	}
+
+	if payload.GameID == "" {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "game_id is required")
+		return
+	}
+	if payload.Move == "" {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "move is required")
+		return
+	}
+
+	state, err := c.gameService.MakeMove(payload.GameID, c.userID, payload.Move)
+	if err != nil {
+		c.sendGameError(msg.RequestID, err)
+		return
+	}
+
+	c.sendJSON(OutgoingMessage{
+		Type:      "game.move.accepted",
+		RequestID: msg.RequestID,
+		Payload: map[string]string{
+			"game_id": payload.GameID,
+			"move":    payload.Move,
+		},
+	})
+
+	c.broadcastJSON(payload.GameID, OutgoingMessage{
+		Type:    "game.state",
+		Payload: state,
+	})
+}
+
+func (c *Client) broadcastGameState(gameID string) {
+	session, ok := c.gameService.GetSession(gameID)
+	if !ok {
+		return
+	}
+
+	c.broadcastJSON(gameID, OutgoingMessage{
+		Type:    "game.state",
+		Payload: session.Snapshot(),
+	})
+}
+
+func (c *Client) broadcastJSON(gameID string, v interface{}) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		log.Println("marshal error:", err)
+		return
+	}
+
+	c.hub.broadcast <- BroadcastMessage{
+		GameID:  gameID,
+		Payload: data,
+	}
+}
+
+func (c *Client) sendGameError(requestID string, err error) {
+	switch {
+	case errors.Is(err, game.ErrGameNotFound):
+		c.sendError(requestID, "GAME_NOT_FOUND", "game not found")
+	case errors.Is(err, game.ErrForbidden):
+		c.sendError(requestID, "FORBIDDEN", "you are not a participant of this game")
+	case errors.Is(err, game.ErrGameFull):
+		c.sendError(requestID, "GAME_FULL", "game already has two players")
+	case errors.Is(err, game.ErrNotYourTurn):
+		c.sendError(requestID, "NOT_YOUR_TURN", "it is not your turn")
+	case errors.Is(err, game.ErrGameFinished):
+		c.sendError(requestID, "GAME_FINISHED", "game already finished")
+	case errors.Is(err, game.ErrGameNotActive):
+		c.sendError(requestID, "GAME_NOT_ACTIVE", "game is not active yet")
+	case errors.Is(err, game.ErrInvalidMove):
+		c.sendError(requestID, "INVALID_MOVE", "invalid move")
+	default:
+		c.sendError(requestID, "INTERNAL_ERROR", "internal error")
 	}
 }
 
