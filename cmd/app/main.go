@@ -37,7 +37,7 @@ func main() {
 	go hub.Run()
 
 	// Тестовая игра между двумя пользователями
-	gameService.CreateGame("game-123", "user1", "user2", game.NewMockEngine())
+	gameService.CreateGame("game-123", "user1", "user2", game.NewChessEngine())
 
 	http.HandleFunc("/ws", wsHandler.ServeWS)
 
