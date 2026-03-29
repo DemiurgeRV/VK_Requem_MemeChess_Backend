@@ -1,8 +1,10 @@
 package game
 
 import (
+	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 var (
@@ -31,23 +33,41 @@ type State struct {
 }
 
 type Service struct {
-	mu       sync.RWMutex
-	sessions map[string]*Session
+	mu         sync.RWMutex
+	sessions   map[string]*Session
+	repository *Repository
 }
 
-func NewService() *Service {
+func NewService(repository *Repository) *Service {
 	return &Service{
-		sessions: make(map[string]*Session),
+		sessions:   make(map[string]*Session),
+		repository: repository,
 	}
 }
 
-func (s *Service) CreateGame(gameID, player1ID, player2ID string, engine Engine) *Session {
+func (s *Service) CreateGame(ctx context.Context, gameID, player1ID, player2ID string, engine Engine) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	session := NewSession(gameID, player1ID, player2ID, engine)
 	s.sessions[gameID] = session
-	return session
+
+	if s.repository != nil {
+		err := s.repository.CreateGame(ctx, CreateGameParams{
+			GameID:            gameID,
+			Player1ID:         player1ID,
+			Player2ID:         player2ID,
+			Status:            string(session.Status),
+			FEN:               session.FEN,
+			CurrentTurnUserID: session.CurrentTurnUserID,
+		})
+		if err != nil {
+			delete(s.sessions, gameID)
+			return nil, err
+		}
+	}
+
+	return session, nil
 }
 
 func (s *Service) GetSession(gameID string) (*Session, bool) {
@@ -85,7 +105,7 @@ func (s *Service) LeaveGame(gameID, userID string) error {
 	return nil
 }
 
-func (s *Service) MakeMove(gameID, userID, move string) (State, MoveResult, error) {
+func (s *Service) MakeMove(ctx context.Context, gameID, userID, move string) (State, MoveResult, error) {
 	session, ok := s.GetSession(gameID)
 	if !ok {
 		return State{}, MoveResult{}, ErrGameNotFound
@@ -97,5 +117,47 @@ func (s *Service) MakeMove(gameID, userID, move string) (State, MoveResult, erro
 		return State{}, MoveResult{}, ErrInvalidMove
 	}
 
-	return session.ApplyMove(userID, move)
+	state, result, err := session.ApplyMove(userID, move)
+	if err != nil {
+		return State{}, MoveResult{}, err
+	}
+
+	if s.repository != nil {
+		moveNumber := len(state.Moves)
+
+		if err := s.repository.SaveMove(ctx, SaveMoveParams{
+			GameID:      gameID,
+			PlayerID:    userID,
+			MoveNumber:  moveNumber,
+			Move:        result.Move,
+			FEN:         result.FEN,
+			IsCapture:   result.IsCapture,
+			IsCheck:     result.IsCheck,
+			IsCheckmate: result.IsCheckmate,
+		}); err != nil {
+			return State{}, MoveResult{}, err
+		}
+
+		var winnerID *string
+		var finishedAt *time.Time
+
+		if state.WinnerID != "" {
+			winnerID = &state.WinnerID
+			now := time.Now()
+			finishedAt = &now
+		}
+
+		if err := s.repository.UpdateGameState(ctx, UpdateGameStateParams{
+			GameID:            gameID,
+			Status:            state.Status,
+			FEN:               state.FEN,
+			CurrentTurnUserID: state.CurrentTurnUserID,
+			WinnerID:          winnerID,
+			FinishedAt:        finishedAt,
+		}); err != nil {
+			return State{}, MoveResult{}, err
+		}
+	}
+
+	return state, result, nil
 }

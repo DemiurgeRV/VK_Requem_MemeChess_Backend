@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -162,7 +163,7 @@ func (c *Client) handleGameMove(msg IncomingMessage) {
 		return
 	}
 
-	state, result, err := c.gameService.MakeMove(payload.GameID, c.userID, payload.Move)
+	state, result, err := c.gameService.MakeMove(context.Background(), payload.GameID, c.userID, payload.Move)
 	if err != nil {
 		c.sendGameError(msg.RequestID, err)
 		return

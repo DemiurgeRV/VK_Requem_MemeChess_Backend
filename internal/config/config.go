@@ -3,23 +3,23 @@ package config
 import "os"
 
 type Config struct {
-	HTTPPort  string
-	JWTSecret string
+	HTTPPort    string
+	JWTSecret   string
+	PostgresDSN string
 }
 
 func Load() Config {
-	port := os.Getenv("HTTP_PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		secret = "super-secret-key"
-	}
-
 	return Config{
-		HTTPPort:  port,
-		JWTSecret: secret,
+		HTTPPort:    getEnv("HTTP_PORT", "8080"),
+		JWTSecret:   getEnv("JWT_SECRET", "super-secret-dev-key"),
+		PostgresDSN: getEnv("POSTGRES_DSN", "postgres://memechess:memechess@localhost:5432/meme_chess?sslmode=disable"),
 	}
+}
+
+func getEnv(key, fallback string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	return v
 }
