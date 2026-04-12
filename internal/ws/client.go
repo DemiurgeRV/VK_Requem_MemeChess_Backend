@@ -127,7 +127,7 @@ func (c *Client) handleJoinGame(msg IncomingMessage) {
 		return
 	}
 
-	state, err := c.gameService.JoinGame(payload.GameID, c.userID)
+	state, err := c.gameService.JoinGame(context.Background(), payload.GameID, c.userID)
 	if err != nil {
 		c.sendGameError(msg.RequestID, err)
 		return

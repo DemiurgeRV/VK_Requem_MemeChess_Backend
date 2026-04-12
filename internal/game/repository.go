@@ -2,11 +2,14 @@ package game
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var ErrOpponentSeatTaken = errors.New("opponent seat already taken")
 
 type Repository struct {
 	pool *pgxpool.Pool
@@ -19,7 +22,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 type CreateGameParams struct {
 	GameID            string
 	Player1ID         string
-	Player2ID         string
+	Player2ID         *string // nil = waiting for opponent (invite link)
 	Status            string
 	FEN               string
 	CurrentTurnUserID string
@@ -35,10 +38,15 @@ func (r *Repository) CreateGame(ctx context.Context, p CreateGameParams) error {
 		) VALUES ($1, $2, $3, $4, $5, $6)
 	`
 
+	var player2 any
+	if p.Player2ID != nil {
+		player2 = *p.Player2ID
+	}
+
 	_, err := r.pool.Exec(ctx, query,
 		p.GameID,
 		p.Player1ID,
-		p.Player2ID,
+		player2,
 		p.Status,
 		p.FEN,
 		p.CurrentTurnUserID,
@@ -47,6 +55,26 @@ func (r *Repository) CreateGame(ctx context.Context, p CreateGameParams) error {
 		return fmt.Errorf("insert game: %w", err)
 	}
 
+	return nil
+}
+
+func (r *Repository) SetPlayer2(ctx context.Context, gameID, player2ID string) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	const q = `
+		UPDATE games
+		SET player2_id = $2
+		WHERE id = $1 AND player2_id IS NULL
+	`
+
+	tag, err := r.pool.Exec(ctx, q, gameID, player2ID)
+	if err != nil {
+		return fmt.Errorf("set player2: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrOpponentSeatTaken
+	}
 	return nil
 }
 

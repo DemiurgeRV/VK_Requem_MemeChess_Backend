@@ -59,7 +59,35 @@ func NewSession(gameID, player1ID, player2ID string, engine Engine) *Session {
 }
 
 func (s *Session) HasPlayer(userID string) bool {
-	return userID == s.Player1ID || userID == s.Player2ID
+	if userID == s.Player1ID {
+		return true
+	}
+	if s.Player2ID != "" && userID == s.Player2ID {
+		return true
+	}
+	return false
+}
+
+func (s *Session) AssignPlayer2(userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if userID == s.Player1ID {
+		return ErrForbidden
+	}
+	if s.Player2ID != "" {
+		return ErrGameFull
+	}
+	s.Player2ID = userID
+	return nil
+}
+
+func (s *Session) RollbackPlayer2If(userID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Player2ID == userID {
+		s.Player2ID = ""
+	}
 }
 
 func (s *Session) SetConnected(userID string, connected bool) {

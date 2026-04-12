@@ -19,12 +19,12 @@ func newTestServiceWithGame() *Service {
 func activateGame(t *testing.T, svc *Service) {
 	t.Helper()
 
-	_, err := svc.JoinGame("game-123", "user1")
+	_, err := svc.JoinGame(context.Background(), "game-123", "user1")
 	if err != nil {
 		t.Fatalf("user1 failed to join: %v", err)
 	}
 
-	_, err = svc.JoinGame("game-123", "user2")
+	_, err = svc.JoinGame(context.Background(), "game-123", "user2")
 	if err != nil {
 		t.Fatalf("user2 failed to join: %v", err)
 	}
@@ -33,7 +33,7 @@ func activateGame(t *testing.T, svc *Service) {
 func TestJoinGame(t *testing.T) {
 	svc := newTestServiceWithGame()
 
-	state1, err := svc.JoinGame("game-123", "user1")
+	state1, err := svc.JoinGame(context.Background(), "game-123", "user1")
 	if err != nil {
 		t.Fatalf("user1 join failed: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestJoinGame(t *testing.T) {
 		t.Fatalf("expected status waiting after first join, got %s", state1.Status)
 	}
 
-	state2, err := svc.JoinGame("game-123", "user2")
+	state2, err := svc.JoinGame(context.Background(), "game-123", "user2")
 	if err != nil {
 		t.Fatalf("user2 join failed: %v", err)
 	}
@@ -63,13 +63,54 @@ func TestJoinGame(t *testing.T) {
 func TestJoinGame_Forbidden(t *testing.T) {
 	svc := newTestServiceWithGame()
 
-	_, err := svc.JoinGame("game-123", "intruder")
+	_, err := svc.JoinGame(context.Background(), "game-123", "intruder")
 	if err == nil {
-		t.Fatal("expected forbidden error, got nil")
+		t.Fatal("expected error, got nil")
 	}
 
-	if err != ErrForbidden {
-		t.Fatalf("expected ErrForbidden, got %v", err)
+	if err != ErrGameFull {
+		t.Fatalf("expected ErrGameFull for third party when room is full, got %v", err)
+	}
+}
+
+func TestInviteSecondPlayerJoins(t *testing.T) {
+	svc := NewService(nil)
+
+	gameID, err := svc.CreateInviteGame(context.Background(), "host", NewChessEngine())
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	_, err = svc.JoinGame(context.Background(), gameID, "host")
+	if err != nil {
+		t.Fatalf("host join: %v", err)
+	}
+
+	st, err := svc.JoinGame(context.Background(), gameID, "guest")
+	if err != nil {
+		t.Fatalf("guest join: %v", err)
+	}
+	if st.Player2ID != "guest" {
+		t.Fatalf("expected player2 guest, got %q", st.Player2ID)
+	}
+	if st.Status != string(StatusActive) {
+		t.Fatalf("expected active after both connected, got %s", st.Status)
+	}
+}
+
+func TestInviteThirdPlayerRejected(t *testing.T) {
+	svc := NewService(nil)
+
+	gameID, err := svc.CreateInviteGame(context.Background(), "host", NewChessEngine())
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	_, _ = svc.JoinGame(context.Background(), gameID, "host")
+	_, _ = svc.JoinGame(context.Background(), gameID, "guest")
+
+	_, err = svc.JoinGame(context.Background(), gameID, "intruder")
+	if err != ErrGameFull {
+		t.Fatalf("expected ErrGameFull, got %v", err)
 	}
 }
 

@@ -2,6 +2,8 @@ package game
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"sync"
 	"time"
@@ -53,10 +55,11 @@ func (s *Service) CreateGame(ctx context.Context, gameID, player1ID, player2ID s
 	s.sessions[gameID] = session
 
 	if s.repository != nil {
+		p2 := player2ID
 		err := s.repository.CreateGame(ctx, CreateGameParams{
 			GameID:            gameID,
 			Player1ID:         player1ID,
-			Player2ID:         player2ID,
+			Player2ID:         &p2,
 			Status:            string(session.Status),
 			FEN:               session.FEN,
 			CurrentTurnUserID: session.CurrentTurnUserID,
@@ -70,6 +73,51 @@ func (s *Service) CreateGame(ctx context.Context, gameID, player1ID, player2ID s
 	return session, nil
 }
 
+func (s *Service) CreateInviteGame(ctx context.Context, hostUserID string, engine Engine) (gameID string, err error) {
+	id, err := newGameID()
+	if err != nil {
+		return "", err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.sessions[id]; exists {
+		return "", errors.New("game id collision")
+	}
+
+	session := NewSession(id, hostUserID, "", engine)
+	s.sessions[id] = session
+
+	if s.repository != nil {
+		err := s.repository.CreateGame(ctx, CreateGameParams{
+			GameID:            id,
+			Player1ID:         hostUserID,
+			Player2ID:         nil,
+			Status:            string(session.Status),
+			FEN:               session.FEN,
+			CurrentTurnUserID: session.CurrentTurnUserID,
+		})
+		if err != nil {
+			delete(s.sessions, id)
+			return "", err
+		}
+	}
+
+	return id, nil
+}
+
+func newGameID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	h := hex.EncodeToString(b[:])
+	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32], nil
+}
+
 func (s *Service) GetSession(gameID string) (*Session, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -78,14 +126,29 @@ func (s *Service) GetSession(gameID string) (*Session, bool) {
 	return session, ok
 }
 
-func (s *Service) JoinGame(gameID, userID string) (State, error) {
+func (s *Service) JoinGame(ctx context.Context, gameID, userID string) (State, error) {
 	session, ok := s.GetSession(gameID)
 	if !ok {
 		return State{}, ErrGameNotFound
 	}
 
-	if !session.HasPlayer(userID) {
-		return State{}, ErrForbidden
+	if session.HasPlayer(userID) {
+		session.SetConnected(userID, true)
+		return session.Snapshot(), nil
+	}
+
+	if err := session.AssignPlayer2(userID); err != nil {
+		return State{}, err
+	}
+
+	if s.repository != nil {
+		if err := s.repository.SetPlayer2(ctx, gameID, userID); err != nil {
+			session.RollbackPlayer2If(userID)
+			if errors.Is(err, ErrOpponentSeatTaken) {
+				return State{}, ErrGameFull
+			}
+			return State{}, err
+		}
 	}
 
 	session.SetConnected(userID, true)

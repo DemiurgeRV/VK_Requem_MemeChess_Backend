@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -53,4 +54,17 @@ func (m *JWTManager) Parse(tokenString string) (*Claims, error) {
 	}
 
 	return claims, nil
+}
+
+func (m *JWTManager) ClaimsFromAuthorizationHeader(authorization string) (*Claims, error) {
+	raw := strings.TrimSpace(authorization)
+	prefix := "bearer "
+	if len(raw) < len(prefix) || strings.ToLower(raw[:len(prefix)]) != prefix {
+		return nil, errors.New("missing bearer token")
+	}
+	token := strings.TrimSpace(raw[len(prefix):])
+	if token == "" {
+		return nil, errors.New("missing bearer token")
+	}
+	return m.Parse(token)
 }

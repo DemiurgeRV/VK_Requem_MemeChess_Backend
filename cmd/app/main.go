@@ -1,10 +1,10 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 
 	"meme_chess/internal/auth"
 	"meme_chess/internal/config"
@@ -46,24 +46,35 @@ func main() {
 	gameRepo := game.NewRepository(pg.Pool)
 	gameService := game.NewService(gameRepo)
 	wsHandler := ws.NewHandler(hub, gameService, jwtManager)
+	gameHTTP := &game.HTTP{
+		Svc:      gameService,
+		JWT:      jwtManager,
+		JoinBase: cfg.FrontendJoinBase,
+	}
 
 	go hub.Run()
-
-	// DEBUG: создаём одну тестовую игру
-	_, err = gameService.CreateGame(
-		context.Background(),
-		"11111111-1111-1111-1111-111111111111",
-		"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-		"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-		game.NewChessEngine(),
-	)
-	if err != nil {
-		log.Printf("failed to create debug game: %v", err)
-	}
 
 	http.HandleFunc("/auth/register", authHandlers.Register)
 	http.HandleFunc("/auth/login", authHandlers.Login)
 	http.HandleFunc("/auth/me", authHandlers.Me)
+
+	http.HandleFunc("/games/", func(w http.ResponseWriter, r *http.Request) {
+		rest := strings.TrimPrefix(r.URL.Path, "/games/")
+		rest = strings.TrimSuffix(rest, "/")
+		if strings.Contains(rest, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		if rest == "invite" {
+			gameHTTP.PostInvite(w, r)
+			return
+		}
+		if rest == "" {
+			http.NotFound(w, r)
+			return
+		}
+		gameHTTP.GetGame(w, r, rest)
+	})
 
 	http.HandleFunc("/ws", wsHandler.ServeWS)
 
@@ -83,16 +94,6 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"token": token,
 		})
-	})
-
-	http.HandleFunc("/debug/game", func(w http.ResponseWriter, r *http.Request) {
-		session, ok := gameService.GetSession("11111111-1111-1111-1111-111111111111")
-		if !ok {
-			http.Error(w, "game not found", http.StatusNotFound)
-			return
-		}
-
-		_ = json.NewEncoder(w).Encode(session.Snapshot())
 	})
 
 	log.Printf("server started on :%s", cfg.HTTPPort)
