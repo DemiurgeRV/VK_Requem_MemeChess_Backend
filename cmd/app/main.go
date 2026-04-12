@@ -10,6 +10,7 @@ import (
 	"meme_chess/internal/config"
 	"meme_chess/internal/db"
 	"meme_chess/internal/game"
+	"meme_chess/internal/user"
 	"meme_chess/internal/ws"
 )
 
@@ -37,6 +38,10 @@ func main() {
 	}
 
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret)
+	userRepo := user.NewRepository(pg.Pool)
+	authService := auth.NewService(userRepo, jwtManager)
+	authHandlers := &auth.Handlers{Service: authService}
+
 	hub := ws.NewHub()
 	gameRepo := game.NewRepository(pg.Pool)
 	gameService := game.NewService(gameRepo)
@@ -55,6 +60,10 @@ func main() {
 	if err != nil {
 		log.Printf("failed to create debug game: %v", err)
 	}
+
+	http.HandleFunc("/auth/register", authHandlers.Register)
+	http.HandleFunc("/auth/login", authHandlers.Login)
+	http.HandleFunc("/auth/me", authHandlers.Me)
 
 	http.HandleFunc("/ws", wsHandler.ServeWS)
 
