@@ -1,6 +1,9 @@
 package game
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 type Status string
 
@@ -35,10 +38,14 @@ type Session struct {
 
 	CurrentTurnUserID string `json:"current_turn_user_id"`
 
-	FEN            string `json:"fen"`
-	LastMove       string `json:"last_move"`
-	WinnerID       string `json:"winner_id,omitempty"`
-	FinishedReason string `json:"finished_reason,omitempty"`
+	FEN                 string `json:"fen"`
+	LastMove            string `json:"last_move"`
+	WinnerID            string `json:"winner_id,omitempty"`
+	FinishedReason      string `json:"finished_reason,omitempty"`
+	RootPositionHash    string `json:"root_position_hash"`
+	CurrentPositionHash string `json:"current_position_hash"`
+	VariantPly          int    `json:"variant_ply"`
+	InviteExpiresAt     time.Time
 
 	Moves []Move `json:"moves"`
 
@@ -59,6 +66,9 @@ func NewSession(gameID, player1ID, player2ID string, engine Engine) *Session {
 }
 
 func (s *Session) HasPlayer(userID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	if userID == s.Player1ID {
 		return true
 	}
@@ -66,6 +76,41 @@ func (s *Session) HasPlayer(userID string) bool {
 		return true
 	}
 	return false
+}
+
+func (s *Session) InviteDeadline() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.InviteExpiresAt
+}
+
+func (s *Session) IsInviteExpired(now time.Time) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return !s.InviteExpiresAt.IsZero() && now.After(s.InviteExpiresAt) && s.Player2ID == ""
+}
+
+func (s *Session) ReserveInviteSeat(userID string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if userID == s.Player1ID {
+		return ErrInviteOwnGame
+	}
+	if s.Player2ID == userID {
+		return nil
+	}
+	if !s.InviteExpiresAt.IsZero() && now.After(s.InviteExpiresAt) && s.Player2ID == "" {
+		return ErrInviteExpired
+	}
+	if s.Player2ID != "" {
+		return ErrInviteUsed
+	}
+
+	s.Player2ID = userID
+	return nil
 }
 
 func (s *Session) AssignPlayer2(userID string) error {
@@ -114,19 +159,31 @@ func (s *Session) Snapshot() State {
 	copy(moves, s.Moves)
 
 	return State{
-		GameID:            s.GameID,
-		Player1ID:         s.Player1ID,
-		Player2ID:         s.Player2ID,
-		Player1Connected:  s.Player1Connected,
-		Player2Connected:  s.Player2Connected,
-		Status:            string(s.Status),
-		CurrentTurnUserID: s.CurrentTurnUserID,
-		FEN:               s.FEN,
-		LastMove:          s.LastMove,
-		WinnerID:          s.WinnerID,
-		FinishedReason:    s.FinishedReason,
-		Moves:             moves,
+		GameID:              s.GameID,
+		Player1ID:           s.Player1ID,
+		Player2ID:           s.Player2ID,
+		Player1Connected:    s.Player1Connected,
+		Player2Connected:    s.Player2Connected,
+		Status:              string(s.Status),
+		CurrentTurnUserID:   s.CurrentTurnUserID,
+		FEN:                 s.FEN,
+		LastMove:            s.LastMove,
+		WinnerID:            s.WinnerID,
+		FinishedReason:      s.FinishedReason,
+		RootPositionHash:    s.RootPositionHash,
+		CurrentPositionHash: s.CurrentPositionHash,
+		VariantPly:          s.VariantPly,
+		Moves:               moves,
 	}
+}
+
+func (s *Session) SetVariantCursor(rootHash, currentHash string, ply int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.RootPositionHash = rootHash
+	s.CurrentPositionHash = currentHash
+	s.VariantPly = ply
 }
 
 func (s *Session) ApplyMove(userID, move string) (State, MoveResult, error) {
@@ -178,17 +235,20 @@ func (s *Session) ApplyMove(userID, move string) (State, MoveResult, error) {
 	copy(moves, s.Moves)
 
 	return State{
-		GameID:            s.GameID,
-		Player1ID:         s.Player1ID,
-		Player2ID:         s.Player2ID,
-		Player1Connected:  s.Player1Connected,
-		Player2Connected:  s.Player2Connected,
-		Status:            string(s.Status),
-		CurrentTurnUserID: s.CurrentTurnUserID,
-		FEN:               s.FEN,
-		LastMove:          s.LastMove,
-		WinnerID:          s.WinnerID,
-		FinishedReason:    s.FinishedReason,
-		Moves:             moves,
+		GameID:              s.GameID,
+		Player1ID:           s.Player1ID,
+		Player2ID:           s.Player2ID,
+		Player1Connected:    s.Player1Connected,
+		Player2Connected:    s.Player2Connected,
+		Status:              string(s.Status),
+		CurrentTurnUserID:   s.CurrentTurnUserID,
+		FEN:                 s.FEN,
+		LastMove:            s.LastMove,
+		WinnerID:            s.WinnerID,
+		FinishedReason:      s.FinishedReason,
+		RootPositionHash:    s.RootPositionHash,
+		CurrentPositionHash: s.CurrentPositionHash,
+		VariantPly:          s.VariantPly,
+		Moves:               moves,
 	}, result, nil
 }

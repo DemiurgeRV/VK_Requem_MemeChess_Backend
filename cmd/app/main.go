@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"meme_chess/internal/analyzer"
 	"meme_chess/internal/auth"
 	"meme_chess/internal/config"
 	"meme_chess/internal/db"
@@ -29,6 +30,26 @@ func withCORS(next http.Handler) http.Handler {
 	})
 }
 
+func registerAuthRoutes(h *auth.Handlers) {
+	routes := []struct {
+		path    string
+		handler http.HandlerFunc
+	}{
+		{path: "/auth/register", handler: h.Register},
+		{path: "/auth/login", handler: h.Login},
+		{path: "/auth/me", handler: h.Me},
+		{path: "/auth/logout", handler: h.Logout},
+		{path: "/api/v1/auth/register", handler: h.Register},
+		{path: "/api/v1/auth/login", handler: h.Login},
+		{path: "/api/v1/auth/me", handler: h.Me},
+		{path: "/api/v1/auth/logout", handler: h.Logout},
+	}
+
+	for _, route := range routes {
+		http.HandleFunc(route.path, route.handler)
+	}
+}
+
 func main() {
 	cfg := config.Load()
 
@@ -47,16 +68,44 @@ func main() {
 	gameService := game.NewService(gameRepo)
 	wsHandler := ws.NewHandler(hub, gameService, jwtManager)
 	gameHTTP := &game.HTTP{
-		Svc:      gameService,
-		JWT:      jwtManager,
-		JoinBase: cfg.FrontendJoinBase,
+		Svc:         gameService,
+		JWT:         jwtManager,
+		AuthService: authService,
+		UserRepo:    userRepo,
+		JoinBase:    cfg.FrontendJoinBase,
 	}
+	analyzerHTTP, analyzerCache, err := analyzer.NewHTTPHandler(cfg.AnalysisCachePath)
+	if err != nil {
+		log.Fatalf("failed to initialize analyzer: %v", err)
+	}
+	defer analyzerCache.Close()
 
 	go hub.Run()
 
-	http.HandleFunc("/auth/register", authHandlers.Register)
-	http.HandleFunc("/auth/login", authHandlers.Login)
-	http.HandleFunc("/auth/me", authHandlers.Me)
+	registerAuthRoutes(authHandlers)
+	http.Handle("/api/v1/", analyzerHTTP)
+	http.HandleFunc("/api/v1/games/invite", gameHTTP.PostInvite)
+	http.HandleFunc("/api/v1/games/", func(w http.ResponseWriter, r *http.Request) {
+		rest := strings.TrimPrefix(r.URL.Path, "/api/v1/games/")
+		rest = strings.Trim(rest, "/")
+		parts := strings.Split(rest, "/")
+		if len(parts) == 2 && parts[0] != "" && parts[1] == "participants" {
+			gameHTTP.GetParticipants(w, r, parts[0])
+			return
+		}
+		http.NotFound(w, r)
+	})
+	http.HandleFunc("/api/v1/invites/", func(w http.ResponseWriter, r *http.Request) {
+		rest := strings.TrimPrefix(r.URL.Path, "/api/v1/invites/")
+		rest = strings.Trim(rest, "/")
+		parts := strings.Split(rest, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] != "join" {
+			http.NotFound(w, r)
+			return
+		}
+
+		gameHTTP.PostInviteJoin(w, r, parts[0])
+	})
 
 	http.HandleFunc("/games/", func(w http.ResponseWriter, r *http.Request) {
 		rest := strings.TrimPrefix(r.URL.Path, "/games/")
@@ -97,6 +146,7 @@ func main() {
 	})
 
 	log.Printf("server started on :%s", cfg.HTTPPort)
+	log.Printf("analyzer cache path: %s", cfg.AnalysisCachePath)
 	//log.Fatal(http.ListenAndServe(":"+cfg.HTTPPort, nil))
 	log.Fatal(http.ListenAndServe(":"+cfg.HTTPPort, withCORS(http.DefaultServeMux)))
 }

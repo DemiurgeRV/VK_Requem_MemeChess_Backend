@@ -5,6 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
+
+	"meme_chess/internal/user"
 )
 
 type Handlers struct {
@@ -28,9 +31,11 @@ type authResponse struct {
 }
 
 type userPublic struct {
-	ID       string  `json:"id"`
-	Username string  `json:"username"`
-	Email    *string `json:"email,omitempty"`
+	ID        string     `json:"id"`
+	Username  string     `json:"username"`
+	Email     *string    `json:"email,omitempty"`
+	AvatarURL *string    `json:"avatar_url,omitempty"`
+	CreatedAt *time.Time `json:"created_at,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -55,7 +60,7 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, userID, err := h.Service.Register(r.Context(), RegisterInput{
+	token, u, err := h.Service.Register(r.Context(), RegisterInput{
 		Username: req.Username,
 		Email:    req.Email,
 		Password: req.Password,
@@ -74,19 +79,9 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email := strings.TrimSpace(req.Email)
-	var emailPtr *string
-	if email != "" {
-		emailPtr = &email
-	}
-
 	writeJSON(w, http.StatusCreated, authResponse{
 		Token: token,
-		User: userPublic{
-			ID:       userID,
-			Username: strings.TrimSpace(req.Username),
-			Email:    emailPtr,
-		},
+		User:  buildUserPublic(u),
 	})
 }
 
@@ -121,11 +116,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, authResponse{
 		Token: token,
-		User: userPublic{
-			ID:       u.ID,
-			Username: u.Username,
-			Email:    u.Email,
-		},
+		User:  buildUserPublic(u),
 	})
 }
 
@@ -148,9 +139,41 @@ func (h *Handlers) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, userPublic{
-		ID:       u.ID,
-		Username: u.Username,
-		Email:    u.Email,
-	})
+	writeJSON(w, http.StatusOK, buildUserPublic(u))
+}
+
+func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	err := h.Service.Logout(r.Header.Get("Authorization"))
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrMissingToken), errors.Is(err, ErrInvalidToken):
+			writeError(w, http.StatusUnauthorized, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "logout failed")
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func buildUserPublic(u *user.User) userPublic {
+	if u == nil {
+		return userPublic{}
+	}
+
+	username := strings.TrimSpace(u.Username)
+
+	return userPublic{
+		ID:        u.ID,
+		Username:  username,
+		Email:     u.Email,
+		AvatarURL: u.AvatarURL,
+		CreatedAt: &u.CreatedAt,
+	}
 }

@@ -1,0 +1,35 @@
+package pattern
+
+type Tag string
+
+const (
+	TagCheck               Tag = "check"
+	TagInaccuracy          Tag = "inaccuracy"
+	TagMistake             Tag = "mistake"
+	TagBlunder             Tag = "blunder"
+	TagFork                Tag = "fork"
+	TagPinToKing           Tag = "pin_to_king"
+	TagRelativePin         Tag = "relative_pin"
+	TagDoubleCheck         Tag = "double_check"
+	TagPerpetualCheck      Tag = "perpetual_check"
+	TagAttack              Tag = "attack"
+	TagHangingPiece        Tag = "hanging_piece"
+	TagMateThreat          Tag = "mate_threat"
+	TagForcedMate          Tag = "forced_mate"
+	TagCheckmate           Tag = "checkmate"
+	TagConversion          Tag = "conversion"
+	TagWinMaterial         Tag = "win_material"
+	TagMissedOpportunity   Tag = "missed_opportunity"
+	TagCastling            Tag = "castling"
+	TagCastlingCheck       Tag = "castling_check"
+	TagCastlingAttack      Tag = "castling_attack"
+	TagOpening             Tag = "opening"
+	TagOpeningOpenGame     Tag = "opening_open_game"
+	TagOpeningItalian      Tag = "opening_italian_game"
+	TagOpeningRuyLopez     Tag = "opening_ruy_lopez"
+	TagOpeningSicilian     Tag = "opening_sicilian_defense"
+	TagOpeningFrench       Tag = "opening_french_defense"
+	TagOpeningCaroKann     Tag = "opening_caro_kann_defense"
+	TagOpeningQueensGambit Tag = "opening_queens_gambit"
+	TagOpeningKingsIndian  Tag = "opening_kings_indian_defense"
+)

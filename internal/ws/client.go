@@ -259,6 +259,8 @@ func (c *Client) sendGameError(requestID string, err error) {
 		c.sendError(requestID, "FORBIDDEN", "you are not a participant of this game")
 	case errors.Is(err, game.ErrGameFull):
 		c.sendError(requestID, "GAME_FULL", "game already has two players")
+	case errors.Is(err, game.ErrInviteExpired):
+		c.sendError(requestID, "INVITE_EXPIRED", "invite token expired")
 	case errors.Is(err, game.ErrNotYourTurn):
 		c.sendError(requestID, "NOT_YOUR_TURN", "it is not your turn")
 	case errors.Is(err, game.ErrGameFinished):

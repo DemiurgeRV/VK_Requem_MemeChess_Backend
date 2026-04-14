@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -15,11 +17,13 @@ import (
 var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrWeakPassword       = errors.New("password must be at least 8 characters")
-	ErrInvalidUsername    = errors.New("username must be 3–32 characters, letters, digits, underscore")
+	ErrInvalidUsername    = errors.New("username must be 3-32 characters, letters, digits, underscore")
 	ErrDuplicateUser      = errors.New("username or email already taken")
 	ErrMissingToken       = errors.New("missing bearer token")
 	ErrInvalidToken       = errors.New("invalid token")
 )
+
+const guestUsernamePrefix = "guest_"
 
 type Service struct {
 	users *user.Repository
@@ -36,13 +40,13 @@ type RegisterInput struct {
 	Password string
 }
 
-func (s *Service) Register(ctx context.Context, in RegisterInput) (token string, userID string, err error) {
+func (s *Service) Register(ctx context.Context, in RegisterInput) (token string, u *user.User, err error) {
 	username := strings.TrimSpace(in.Username)
 	if !validUsername(username) {
-		return "", "", ErrInvalidUsername
+		return "", nil, ErrInvalidUsername
 	}
 	if len(in.Password) < 8 {
-		return "", "", ErrWeakPassword
+		return "", nil, ErrWeakPassword
 	}
 
 	email := strings.TrimSpace(in.Email)
@@ -53,22 +57,31 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (token string,
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
 	if err != nil {
-		return "", "", fmt.Errorf("hash password: %w", err)
+		return "", nil, fmt.Errorf("hash password: %w", err)
 	}
 
 	id, err := s.users.Create(ctx, username, emailPtr, string(hash))
 	if err != nil {
 		if isUniqueViolation(err) {
-			return "", "", ErrDuplicateUser
+			return "", nil, ErrDuplicateUser
 		}
-		return "", "", err
+		return "", nil, err
 	}
 
 	token, err = s.jwt.Generate(id)
 	if err != nil {
-		return "", "", err
+		return "", nil, err
 	}
-	return token, id, nil
+
+	u, err = s.users.GetByID(ctx, id)
+	if err != nil {
+		return "", nil, err
+	}
+	if u == nil {
+		return "", nil, ErrInvalidToken
+	}
+
+	return token, u, nil
 }
 
 type LoginInput struct {
@@ -126,6 +139,62 @@ func (s *Service) UserFromBearer(ctx context.Context, authorization string) (*us
 	return u, nil
 }
 
+func (s *Service) Logout(authorization string) error {
+	raw := strings.TrimSpace(authorization)
+	if !strings.HasPrefix(strings.ToLower(raw), "bearer ") {
+		return ErrMissingToken
+	}
+
+	token := strings.TrimSpace(raw[7:])
+	if token == "" {
+		return ErrMissingToken
+	}
+
+	if err := s.jwt.Revoke(token); err != nil {
+		return ErrInvalidToken
+	}
+
+	return nil
+}
+
+func (s *Service) CreateGuestSession(ctx context.Context) (token string, u *user.User, err error) {
+	for attempt := 0; attempt < 5; attempt++ {
+		username, err := newGuestUsername()
+		if err != nil {
+			return "", nil, err
+		}
+
+		id, err := s.users.Create(ctx, username, nil, "")
+		if err != nil {
+			if isUniqueViolation(err) {
+				continue
+			}
+			return "", nil, err
+		}
+
+		token, err = s.jwt.Generate(id)
+		if err != nil {
+			return "", nil, err
+		}
+
+		u, err = s.users.GetByID(ctx, id)
+		if err != nil {
+			return "", nil, err
+		}
+		if u == nil {
+			return "", nil, ErrInvalidToken
+		}
+
+		return token, u, nil
+	}
+
+	return "", nil, errors.New("failed to create guest session")
+}
+
+func IsGuestUsername(username string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(username)), guestUsernamePrefix)
+}
+
 func validUsername(s string) bool {
 	if len(s) < 3 || len(s) > 32 {
 		return false
@@ -137,6 +206,15 @@ func validUsername(s string) bool {
 		return false
 	}
 	return true
+}
+
+func newGuestUsername() (string, error) {
+	var suffix [4]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", fmt.Errorf("generate guest username: %w", err)
+	}
+
+	return guestUsernamePrefix + hex.EncodeToString(suffix[:]), nil
 }
 
 func isUniqueViolation(err error) bool {
