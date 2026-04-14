@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"meme_chess/internal/game"
@@ -109,6 +110,9 @@ func (c *Client) handleIncomingMessage(msg IncomingMessage) {
 
 	case "game.move":
 		c.handleGameMove(msg)
+
+	case "game.emote":
+		c.handleGameEmote(msg)
 
 	default:
 		c.sendError(msg.RequestID, "UNKNOWN_TYPE", "unknown message type")
@@ -224,6 +228,61 @@ func (c *Client) handleGameMove(msg IncomingMessage) {
 			},
 		})
 	}
+}
+
+func (c *Client) handleGameEmote(msg IncomingMessage) {
+	var payload GameEmotePayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "invalid emote payload")
+		return
+	}
+
+	if payload.GameID == "" {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "game_id is required")
+		return
+	}
+
+	emoteMP4 := strings.TrimSpace(payload.EmoteMP4)
+	if emoteMP4 == "" {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "emote_mp4 is required")
+		return
+	}
+	if len(emoteMP4) > 1024 {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "emote_mp4 is too long")
+		return
+	}
+	if !strings.HasSuffix(strings.ToLower(emoteMP4), ".mp4") {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "emote_mp4 must be an mp4 path or URL")
+		return
+	}
+
+	session, ok := c.gameService.GetSession(payload.GameID)
+	if !ok {
+		c.sendError(msg.RequestID, "GAME_NOT_FOUND", "game not found")
+		return
+	}
+	if !session.HasPlayer(c.userID) {
+		c.sendError(msg.RequestID, "FORBIDDEN", "you are not a participant of this game")
+		return
+	}
+
+	c.sendJSON(OutgoingMessage{
+		Type:      "game.emote.accepted",
+		RequestID: msg.RequestID,
+		Payload: map[string]string{
+			"game_id":   payload.GameID,
+			"emote_mp4": emoteMP4,
+		},
+	})
+
+	c.broadcastJSON(payload.GameID, OutgoingMessage{
+		Type: "game.emote",
+		Payload: map[string]string{
+			"game_id":    payload.GameID,
+			"by_user_id": c.userID,
+			"emote_mp4":  emoteMP4,
+		},
+	})
 }
 
 func (c *Client) broadcastGameState(gameID string) {
