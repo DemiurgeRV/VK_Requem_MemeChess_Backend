@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"meme_chess/internal/game"
@@ -109,6 +110,9 @@ func (c *Client) handleIncomingMessage(msg IncomingMessage) {
 
 	case "game.move":
 		c.handleGameMove(msg)
+
+	case "game.sticker":
+		c.handleGameSticker(msg)
 
 	default:
 		c.sendError(msg.RequestID, "UNKNOWN_TYPE", "unknown message type")
@@ -224,6 +228,76 @@ func (c *Client) handleGameMove(msg IncomingMessage) {
 			},
 		})
 	}
+}
+
+func (c *Client) handleGameSticker(msg IncomingMessage) {
+	var payload GameStickerPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "invalid sticker payload")
+		return
+	}
+
+	payload.GameID = strings.TrimSpace(payload.GameID)
+	payload.StickerID = strings.TrimSpace(payload.StickerID)
+	payload.Title = strings.TrimSpace(payload.Title)
+	payload.AssetURL = strings.TrimSpace(payload.AssetURL)
+	payload.MediaType = strings.TrimSpace(payload.MediaType)
+	payload.ImageURL = strings.TrimSpace(payload.ImageURL)
+	payload.VideoURL = strings.TrimSpace(payload.VideoURL)
+	payload.SoundURL = strings.TrimSpace(payload.SoundURL)
+
+	if payload.GameID == "" {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "game_id is required")
+		return
+	}
+	if payload.AssetURL == "" {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "asset_url is required")
+		return
+	}
+	if _, ok := c.gameIDs[payload.GameID]; !ok {
+		c.sendError(msg.RequestID, "GAME_NOT_JOINED", "join the game room before sending stickers")
+		return
+	}
+
+	session, ok := c.gameService.GetSession(payload.GameID)
+	if !ok {
+		c.sendError(msg.RequestID, "GAME_NOT_FOUND", "game not found")
+		return
+	}
+	if !session.HasPlayer(c.userID) {
+		c.sendError(msg.RequestID, "FORBIDDEN", "you are not a participant of this game")
+		return
+	}
+
+	c.sendJSON(OutgoingMessage{
+		Type:      "game.sticker.accepted",
+		RequestID: msg.RequestID,
+		Payload: map[string]string{
+			"game_id":    payload.GameID,
+			"sticker_id": payload.StickerID,
+			"title":      payload.Title,
+			"asset_url":  payload.AssetURL,
+			"media_type": payload.MediaType,
+			"image_url":  payload.ImageURL,
+			"video_url":  payload.VideoURL,
+			"sound_url":  payload.SoundURL,
+		},
+	})
+
+	c.broadcastJSON(payload.GameID, OutgoingMessage{
+		Type: "game.sticker",
+		Payload: map[string]string{
+			"game_id":    payload.GameID,
+			"by_user_id": c.userID,
+			"sticker_id": payload.StickerID,
+			"title":      payload.Title,
+			"asset_url":  payload.AssetURL,
+			"media_type": payload.MediaType,
+			"image_url":  payload.ImageURL,
+			"video_url":  payload.VideoURL,
+			"sound_url":  payload.SoundURL,
+		},
+	})
 }
 
 func (c *Client) broadcastGameState(gameID string) {
