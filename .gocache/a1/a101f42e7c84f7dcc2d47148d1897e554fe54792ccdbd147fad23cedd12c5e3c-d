@@ -1,8 +1,0 @@
-./chess_engine.go
-./engine.go
-./http.go
-./mock_engine.go
-./repository.go
-./service.go
-./session.go
-./service_test.go
