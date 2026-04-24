@@ -1,0 +1,11 @@
+./analysis.go
+./chess_engine.go
+./engine.go
+./http.go
+./mock_engine.go
+./repository.go
+./service.go
+./service_analysis.go
+./session.go
+./analysis_test.go
+./service_test.go

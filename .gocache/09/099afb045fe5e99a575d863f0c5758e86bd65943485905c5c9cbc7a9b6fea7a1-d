@@ -1,0 +1,3 @@
+./analyzer_integration_test.go
+./analyzer_test.go
+./test_helpers_test.go

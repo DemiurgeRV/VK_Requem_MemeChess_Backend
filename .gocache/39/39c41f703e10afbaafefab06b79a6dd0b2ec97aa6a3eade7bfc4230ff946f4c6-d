@@ -1,0 +1,4 @@
+./generator.go
+./perft.go
+./movegenerator_test.go
+./perft_test.go
