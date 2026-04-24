@@ -1,0 +1,6 @@
+./fen.go
+./hash.go
+./move.go
+./state.go
+./types.go
+./uci.go

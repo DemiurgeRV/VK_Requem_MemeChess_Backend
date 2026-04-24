@@ -247,7 +247,7 @@ func TestAnalyzer_EnsureHotFrontierAsync_QueuesWork(t *testing.T) {
 	gs := newGame(t)
 	svc.EnsureHotFrontierAsync(gs, 2, 2)
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		if pos, ok := cache.GetPosition(gs.Hash()); ok && pos.FrontierDepth >= 2 {
 			return

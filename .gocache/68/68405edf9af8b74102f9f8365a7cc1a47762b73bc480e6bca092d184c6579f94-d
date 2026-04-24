@@ -1,0 +1,4 @@
+=== RUN   TestAnalyzer_EnsureHotFrontier_PrecachesHumanMovesAndReplies
+--- PASS: TestAnalyzer_EnsureHotFrontier_PrecachesHumanMovesAndReplies (108.59s)
+PASS
+ok  	meme_chess/internal/analyzer/service	109.288s

@@ -1,0 +1,8 @@
+# test log
+stat C:\Users\ASUS\AppData\Local\Temp\TestPersistentCache_PersistsMovesBetweenInstances563653781\001
+stat C:\Users\ASUS\AppData\Local\Temp\TestPersistentCache_PersistsMovesBetweenInstances563653781\001
+open C:\Users\ASUS\AppData\Local\Temp
+stat C:\Users\ASUS\AppData\Local\Temp\TestPersistentCache_CreatesDatabaseFile961523557\001\nested
+stat C:\Users\ASUS\AppData\Local\Temp\TestPersistentCache_CreatesDatabaseFile961523557\001
+stat C:\Users\ASUS\AppData\Local\Temp\TestPersistentCache_CreatesDatabaseFile961523557\001\nested\analysis.db
+open C:\Users\ASUS\AppData\Local\Temp

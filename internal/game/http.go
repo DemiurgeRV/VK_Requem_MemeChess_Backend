@@ -64,6 +64,12 @@ type participantsResponse struct {
 	Player2 *inviteParticipant `json:"player2,omitempty"`
 }
 
+type moveAnalysisRequest struct {
+	Move       string `json:"move"`
+	MoveNumber int    `json:"move_number,omitempty"`
+	Depth      int    `json:"depth,omitempty"`
+}
+
 // PostInvite creates a new room; host shares JoinBase/invite/{invite_token} with the opponent.
 func (h *HTTP) PostInvite(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -218,6 +224,43 @@ func (h *HTTP) GetParticipants(w http.ResponseWriter, r *http.Request, gameID st
 		GameID:  snapshot.GameID,
 		Player1: player1,
 		Player2: player2,
+	})
+}
+
+func (h *HTTP) PostAnalyzeMove(w http.ResponseWriter, r *http.Request, gameID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	participant, err := h.AuthService.UserFromBearer(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+
+	var req moveAnalysisRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+
+	result, err := h.Svc.AnalyzeMove(gameID, participant.ID, req.Move, req.MoveNumber, req.Depth)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrGameNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "game not found"})
+		case errors.Is(err, ErrForbidden):
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "not a participant"})
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":     true,
+		"result": result,
 	})
 }
 

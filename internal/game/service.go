@@ -49,6 +49,7 @@ type Service struct {
 	sessions       map[string]*Session
 	repository     *Repository
 	variantTracker *tree.Tracker
+	moveAnalyzer   MoveAnalyzer
 }
 
 func NewService(repository *Repository) *Service {
@@ -57,6 +58,12 @@ func NewService(repository *Repository) *Service {
 		repository:     repository,
 		variantTracker: tree.NewTracker(),
 	}
+}
+
+func (s *Service) SetMoveAnalyzer(moveAnalyzer MoveAnalyzer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.moveAnalyzer = moveAnalyzer
 }
 
 func (s *Service) CreateGame(ctx context.Context, gameID, player1ID, player2ID string, engine Engine) (*Session, error) {
@@ -82,6 +89,10 @@ func (s *Service) CreateGame(ctx context.Context, gameID, player1ID, player2ID s
 			delete(s.sessions, gameID)
 			return nil, err
 		}
+	}
+
+	if s.moveAnalyzer != nil {
+		s.moveAnalyzer.StartGame(gameID)
 	}
 
 	return session, nil
@@ -119,6 +130,10 @@ func (s *Service) CreateInviteGame(ctx context.Context, hostUserID string, engin
 			delete(s.sessions, id)
 			return "", err
 		}
+	}
+
+	if s.moveAnalyzer != nil {
+		s.moveAnalyzer.StartGame(id)
 	}
 
 	return id, nil
@@ -279,6 +294,10 @@ func (s *Service) MakeMove(ctx context.Context, gameID, userID, move string) (St
 		}); err != nil {
 			return State{}, MoveResult{}, err
 		}
+	}
+
+	if s.moveAnalyzer != nil {
+		s.moveAnalyzer.RecordMove(gameID, result.Move)
 	}
 
 	return state, result, nil

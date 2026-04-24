@@ -17,12 +17,19 @@ import (
 
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			origin = "*"
+		} else {
+			w.Header().Add("Vary", "Origin")
+		}
+
+		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 
@@ -57,6 +64,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to connect postgres: %v", err)
 	}
+	defer pg.Pool.Close()
 
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret)
 	userRepo := user.NewRepository(pg.Pool)
@@ -74,11 +82,11 @@ func main() {
 		UserRepo:    userRepo,
 		JoinBase:    cfg.FrontendJoinBase,
 	}
-	analyzerHTTP, analyzerCache, err := analyzer.NewHTTPHandler(cfg.AnalysisCachePath)
+	analyzerHTTP, gameAnalyzer, err := analyzer.NewHTTPHandler(pg.Pool)
 	if err != nil {
 		log.Fatalf("failed to initialize analyzer: %v", err)
 	}
-	defer analyzerCache.Close()
+	gameService.SetMoveAnalyzer(gameAnalyzer)
 
 	go hub.Run()
 
@@ -91,6 +99,10 @@ func main() {
 		parts := strings.Split(rest, "/")
 		if len(parts) == 2 && parts[0] != "" && parts[1] == "participants" {
 			gameHTTP.GetParticipants(w, r, parts[0])
+			return
+		}
+		if len(parts) == 3 && parts[0] != "" && parts[1] == "analysis" && parts[2] == "move" {
+			gameHTTP.PostAnalyzeMove(w, r, parts[0])
 			return
 		}
 		http.NotFound(w, r)
@@ -146,7 +158,6 @@ func main() {
 	})
 
 	log.Printf("server started on :%s", cfg.HTTPPort)
-	log.Printf("analyzer cache path: %s", cfg.AnalysisCachePath)
 	//log.Fatal(http.ListenAndServe(":"+cfg.HTTPPort, nil))
 	log.Fatal(http.ListenAndServe(":"+cfg.HTTPPort, withCORS(http.DefaultServeMux)))
 }

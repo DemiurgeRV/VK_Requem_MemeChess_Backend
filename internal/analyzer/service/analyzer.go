@@ -16,12 +16,12 @@ type AnalyzerService struct {
 	gen               *movegen.Generator
 	engine            *search.Engine
 	detector          *pattern.Detector
-	cache             *analysis.Cache
+	cache             analysis.Store
 	precomputeWorkers int
 	frontierManager   *frontierManager
 }
 
-func NewAnalyzerService(rs rules.RuleSet, cache *analysis.Cache) *AnalyzerService {
+func NewAnalyzerService(rs rules.RuleSet, cache analysis.Store) *AnalyzerService {
 	workers := runtime.NumCPU()
 	if workers < 2 {
 		workers = 2

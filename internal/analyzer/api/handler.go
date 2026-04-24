@@ -5,6 +5,7 @@ import (
 	"meme_chess/internal/analyzer/position"
 	"meme_chess/internal/analyzer/service"
 	"net/http"
+	"strings"
 )
 
 const (
@@ -121,7 +122,7 @@ func (h *Handler) AnalyzeMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mv, err := dtoToMove(req.Move)
+	mv, err := dtoToMove(gs, req.Move)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -143,7 +144,7 @@ func buildStateFromMoves(moves []MoveDTO) (*position.GameState, error) {
 	gs := position.NewInitial()
 
 	for _, dto := range moves {
-		mv, err := dtoToMove(dto)
+		mv, err := dtoToMove(gs, dto)
 		if err != nil {
 			return nil, err
 		}
@@ -155,30 +156,15 @@ func buildStateFromMoves(moves []MoveDTO) (*position.GameState, error) {
 	return gs, nil
 }
 
-func dtoToMove(dto MoveDTO) (position.Move, error) {
-	promo := position.NoPieceType
-
-	switch dto.Promotion {
-	case "", " ":
-		promo = position.NoPieceType
-	case "q":
-		promo = position.Queen
-	case "r":
-		promo = position.Rook
-	case "b":
-		promo = position.Bishop
-	case "n":
-		promo = position.Knight
+func dtoToMove(gs *position.GameState, dto MoveDTO) (position.Move, error) {
+	promotion := strings.TrimSpace(strings.ToLower(dto.Promotion))
+	switch promotion {
+	case "", "q", "r", "b", "n":
 	default:
 		return position.Move{}, httpError("invalid promotion")
 	}
 
-	mv, err := position.NewMove(dto.From, dto.To, promo)
-	if err != nil {
-		return position.Move{}, err
-	}
-
-	return mv, nil
+	return position.ParseUCIMove(gs, dto.From+dto.To+promotion)
 }
 
 type httpError string
