@@ -74,6 +74,7 @@ func main() {
 	hub := ws.NewHub()
 	gameRepo := game.NewRepository(pg.Pool)
 	gameService := game.NewService(gameRepo)
+	gameService.SetUserRepository(userRepo)
 	wsHandler := ws.NewHandler(hub, gameService, jwtManager)
 	gameHTTP := &game.HTTP{
 		Svc:         gameService,
@@ -93,6 +94,7 @@ func main() {
 	registerAuthRoutes(authHandlers)
 	http.Handle("/api/v1/", analyzerHTTP)
 	http.HandleFunc("/api/v1/games/invite", gameHTTP.PostInvite)
+	http.HandleFunc("/api/v1/games/match-search", gameHTTP.PostMatchSearch)
 	http.HandleFunc("/api/v1/games/", func(w http.ResponseWriter, r *http.Request) {
 		rest := strings.TrimPrefix(r.URL.Path, "/api/v1/games/")
 		rest = strings.Trim(rest, "/")

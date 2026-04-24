@@ -23,6 +23,8 @@ type User struct {
 	Email        *string
 	Username     string
 	AvatarURL    *string
+	ShopCurrency int64
+	GameCurrency int64
 	CreatedAt    time.Time
 	PasswordHash string
 }
@@ -32,8 +34,8 @@ func (r *Repository) Create(ctx context.Context, username string, email *string,
 	defer cancel()
 
 	const q = `
-		INSERT INTO users (id, username, email, password_hash)
-		VALUES (gen_random_uuid(), $1, $2, $3)
+		INSERT INTO users (id, username, email, password_hash, shop_currency, game_currency)
+		VALUES (gen_random_uuid(), $1, $2, $3, 0, 1000)
 		RETURNING id::text
 	`
 
@@ -50,7 +52,7 @@ func (r *Repository) GetByLogin(ctx context.Context, login string) (*User, error
 	defer cancel()
 
 	const q = `
-		SELECT id::text, email, username, avatar_url, created_at, password_hash
+		SELECT id::text, email, username, avatar_url, shop_currency, game_currency, created_at, password_hash
 		FROM users
 		WHERE lower(username) = lower($1)
 		   OR (email IS NOT NULL AND lower(email) = lower($1))
@@ -62,6 +64,8 @@ func (r *Repository) GetByLogin(ctx context.Context, login string) (*User, error
 		&u.Email,
 		&u.Username,
 		&u.AvatarURL,
+		&u.ShopCurrency,
+		&u.GameCurrency,
 		&u.CreatedAt,
 		&u.PasswordHash,
 	)
@@ -79,7 +83,7 @@ func (r *Repository) GetByID(ctx context.Context, id string) (*User, error) {
 	defer cancel()
 
 	const q = `
-		SELECT id::text, email, username, avatar_url, created_at, password_hash
+		SELECT id::text, email, username, avatar_url, shop_currency, game_currency, created_at, password_hash
 		FROM users
 		WHERE id = $1
 	`
@@ -90,6 +94,8 @@ func (r *Repository) GetByID(ctx context.Context, id string) (*User, error) {
 		&u.Email,
 		&u.Username,
 		&u.AvatarURL,
+		&u.ShopCurrency,
+		&u.GameCurrency,
 		&u.CreatedAt,
 		&u.PasswordHash,
 	)
@@ -100,4 +106,52 @@ func (r *Repository) GetByID(ctx context.Context, id string) (*User, error) {
 		return nil, fmt.Errorf("select user: %w", err)
 	}
 	return &u, nil
+}
+
+var ErrInsufficientGameCurrency = errors.New("insufficient game currency")
+
+func (r *Repository) ReserveGameCurrency(ctx context.Context, userID string, amount int64) error {
+	if amount <= 0 {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	const q = `
+		UPDATE users
+		SET game_currency = game_currency - $2
+		WHERE id = $1
+		  AND game_currency >= $2
+	`
+
+	tag, err := r.pool.Exec(ctx, q, userID, amount)
+	if err != nil {
+		return fmt.Errorf("reserve game currency: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrInsufficientGameCurrency
+	}
+	return nil
+}
+
+func (r *Repository) AddGameCurrency(ctx context.Context, userID string, amount int64) error {
+	if amount <= 0 {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	const q = `
+		UPDATE users
+		SET game_currency = game_currency + $2
+		WHERE id = $1
+	`
+
+	_, err := r.pool.Exec(ctx, q, userID, amount)
+	if err != nil {
+		return fmt.Errorf("add game currency: %w", err)
+	}
+	return nil
 }

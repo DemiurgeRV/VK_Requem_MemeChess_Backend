@@ -70,6 +70,12 @@ type moveAnalysisRequest struct {
 	Depth      int    `json:"depth,omitempty"`
 }
 
+type matchSearchRequest struct {
+	GameMode string `json:"game_mode"`
+	MinStake int64  `json:"min_stake"`
+	MaxStake int64  `json:"max_stake"`
+}
+
 // PostInvite creates a new room; host shares JoinBase/invite/{invite_token} with the opponent.
 func (h *HTTP) PostInvite(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -262,6 +268,45 @@ func (h *HTTP) PostAnalyzeMove(w http.ResponseWriter, r *http.Request, gameID st
 		"ok":     true,
 		"result": result,
 	})
+}
+
+func (h *HTTP) PostMatchSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	participant, err := h.AuthService.UserFromBearer(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+
+	var req matchSearchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+
+	result, err := h.Svc.SearchMatch(r.Context(), MatchSearchInput{
+		UserID:   participant.ID,
+		GameMode: req.GameMode,
+		MinStake: req.MinStake,
+		MaxStake: req.MaxStake,
+	}, NewChessEngine())
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidStakeRange):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid game_mode or stake range"})
+		case errors.Is(err, user.ErrInsufficientGameCurrency):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "insufficient game currency"})
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to search match"})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *HTTP) resolveInviteParticipant(r *http.Request) (string, *user.User, error) {

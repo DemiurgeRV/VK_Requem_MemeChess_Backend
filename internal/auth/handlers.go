@@ -35,6 +35,8 @@ type userPublic struct {
 	Username  string     `json:"username"`
 	Email     *string    `json:"email,omitempty"`
 	AvatarURL *string    `json:"avatar_url,omitempty"`
+	ShopFunds int64      `json:"shop_funds"`
+	GameFunds int64      `json:"game_funds"`
 	CreatedAt *time.Time `json:"created_at,omitempty"`
 }
 
@@ -174,6 +176,8 @@ func buildUserPublic(u *user.User) userPublic {
 		Username:  username,
 		Email:     u.Email,
 		AvatarURL: u.AvatarURL,
+		ShopFunds: u.ShopCurrency,
+		GameFunds: u.GameCurrency,
 		CreatedAt: &u.CreatedAt,
 	}
 }

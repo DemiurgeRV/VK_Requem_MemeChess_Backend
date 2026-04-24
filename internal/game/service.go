@@ -5,10 +5,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
 	"meme_chess/internal/analyzer/tree"
+	"meme_chess/internal/user"
 )
 
 var (
@@ -22,6 +24,7 @@ var (
 	ErrInviteExpired = errors.New("invite token expired")
 	ErrInviteUsed    = errors.New("invite token already used")
 	ErrInviteOwnGame = errors.New("host cannot join own invite")
+	ErrInvalidStakeRange = errors.New("invalid stake range")
 )
 
 const defaultInviteTTL = 15 * time.Minute
@@ -48,6 +51,8 @@ type Service struct {
 	mu             sync.RWMutex
 	sessions       map[string]*Session
 	repository     *Repository
+	userRepo       *user.Repository
+	matchQueue     []matchRequest
 	variantTracker *tree.Tracker
 	moveAnalyzer   MoveAnalyzer
 }
@@ -56,8 +61,37 @@ func NewService(repository *Repository) *Service {
 	return &Service{
 		sessions:       make(map[string]*Session),
 		repository:     repository,
+		matchQueue:     make([]matchRequest, 0, 32),
 		variantTracker: tree.NewTracker(),
 	}
+}
+
+func (s *Service) SetUserRepository(userRepo *user.Repository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.userRepo = userRepo
+}
+
+type MatchSearchInput struct {
+	UserID   string
+	GameMode string
+	MinStake int64
+	MaxStake int64
+}
+
+type MatchSearchResult struct {
+	Status       string `json:"status"`
+	GameID       string `json:"game_id,omitempty"`
+	AgreedStake  int64  `json:"agreed_stake,omitempty"`
+	GameCurrency string `json:"game_currency,omitempty"`
+	GameMode     string `json:"game_mode,omitempty"`
+}
+
+type matchRequest struct {
+	UserID   string
+	GameMode string
+	MinStake int64
+	MaxStake int64
 }
 
 func (s *Service) SetMoveAnalyzer(moveAnalyzer MoveAnalyzer) {
@@ -81,6 +115,8 @@ func (s *Service) CreateGame(ctx context.Context, gameID, player1ID, player2ID s
 			Player1ID:         player1ID,
 			Player2ID:         &p2,
 			Status:            string(session.Status),
+			BetAmount:         0,
+			MemeMode:          false,
 			FEN:               session.FEN,
 			CurrentTurnUserID: session.CurrentTurnUserID,
 		})
@@ -122,6 +158,8 @@ func (s *Service) CreateInviteGame(ctx context.Context, hostUserID string, engin
 			Player1ID:         hostUserID,
 			Player2ID:         nil,
 			Status:            string(session.Status),
+			BetAmount:         0,
+			MemeMode:          false,
 			FEN:               session.FEN,
 			CurrentTurnUserID: session.CurrentTurnUserID,
 		})
@@ -137,6 +175,151 @@ func (s *Service) CreateInviteGame(ctx context.Context, hostUserID string, engin
 	}
 
 	return id, nil
+}
+
+func (s *Service) SearchMatch(ctx context.Context, in MatchSearchInput, engine Engine) (MatchSearchResult, error) {
+	mode := normalizeGameMode(in.GameMode)
+	if in.UserID == "" || in.MinStake <= 0 || in.MaxStake < in.MinStake || mode == "" {
+		return MatchSearchResult{}, ErrInvalidStakeRange
+	}
+
+	s.mu.Lock()
+	for i := range s.matchQueue {
+		waiting := s.matchQueue[i]
+		if waiting.UserID == in.UserID {
+			s.matchQueue[i] = matchRequest{
+				UserID:   in.UserID,
+				GameMode: mode,
+				MinStake: in.MinStake,
+				MaxStake: in.MaxStake,
+			}
+			s.mu.Unlock()
+			return MatchSearchResult{Status: "queued", GameMode: mode}, nil
+		}
+	}
+
+	matchIndex := -1
+	for i := range s.matchQueue {
+		waiting := s.matchQueue[i]
+		if waiting.UserID == in.UserID {
+			continue
+		}
+		if waiting.GameMode != mode {
+			continue
+		}
+		if !rangesOverlap(waiting.MinStake, waiting.MaxStake, in.MinStake, in.MaxStake) {
+			continue
+		}
+		matchIndex = i
+		break
+	}
+
+	if matchIndex < 0 {
+		s.matchQueue = append(s.matchQueue, matchRequest{
+			UserID:   in.UserID,
+			GameMode: mode,
+			MinStake: in.MinStake,
+			MaxStake: in.MaxStake,
+		})
+		s.mu.Unlock()
+		return MatchSearchResult{Status: "queued", GameMode: mode}, nil
+	}
+
+	waiting := s.matchQueue[matchIndex]
+	s.matchQueue = append(s.matchQueue[:matchIndex], s.matchQueue[matchIndex+1:]...)
+	s.mu.Unlock()
+
+	agreedStake := maxInt64(in.MinStake, waiting.MinStake)
+	if s.userRepo != nil {
+		if err := s.userRepo.ReserveGameCurrency(ctx, in.UserID, agreedStake); err != nil {
+			return MatchSearchResult{}, err
+		}
+		if err := s.userRepo.ReserveGameCurrency(ctx, waiting.UserID, agreedStake); err != nil {
+			_ = s.userRepo.AddGameCurrency(ctx, in.UserID, agreedStake)
+			return MatchSearchResult{}, err
+		}
+	}
+
+	gameID, err := s.createMatchedGame(ctx, in.UserID, waiting.UserID, agreedStake, mode, engine)
+	if err != nil {
+		if s.userRepo != nil {
+			_ = s.userRepo.AddGameCurrency(ctx, in.UserID, agreedStake)
+			_ = s.userRepo.AddGameCurrency(ctx, waiting.UserID, agreedStake)
+		}
+		return MatchSearchResult{}, err
+	}
+
+	return MatchSearchResult{
+		Status:       "matched",
+		GameID:       gameID,
+		AgreedStake:  agreedStake,
+		GameCurrency: "game_currency",
+		GameMode:     mode,
+	}, nil
+}
+
+func (s *Service) createMatchedGame(ctx context.Context, player1ID, player2ID string, stake int64, mode string, engine Engine) (string, error) {
+	id, err := newGameID()
+	if err != nil {
+		return "", err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.sessions[id]; exists {
+		return "", errors.New("game id collision")
+	}
+
+	session := NewSession(id, player1ID, player2ID, engine)
+	s.trackSessionVariantLocked(session)
+	s.sessions[id] = session
+
+	if s.repository != nil {
+		p2 := player2ID
+		err := s.repository.CreateGame(ctx, CreateGameParams{
+			GameID:            id,
+			Player1ID:         player1ID,
+			Player2ID:         &p2,
+			Status:            string(session.Status),
+			BetAmount:         stake,
+			MemeMode:          mode == "meme",
+			FEN:               session.FEN,
+			CurrentTurnUserID: session.CurrentTurnUserID,
+		})
+		if err != nil {
+			s.variantTracker.ForgetGame(id)
+			delete(s.sessions, id)
+			return "", err
+		}
+	}
+
+	if s.moveAnalyzer != nil {
+		s.moveAnalyzer.StartGame(id)
+	}
+
+	return id, nil
+}
+
+func normalizeGameMode(mode string) string {
+	normalized := strings.ToLower(strings.TrimSpace(mode))
+	switch normalized {
+	case "meme", "classic":
+		return normalized
+	default:
+		return ""
+	}
+}
+
+func rangesOverlap(minA, maxA, minB, maxB int64) bool {
+	return minA <= maxB && minB <= maxA
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func newGameID() (string, error) {

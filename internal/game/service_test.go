@@ -356,3 +356,127 @@ func TestParallelGamesShareCommonVariantNodeForSamePosition(t *testing.T) {
 		t.Fatalf("expected both games to be at ply 1, got %d and %d", stateA.VariantPly, stateB.VariantPly)
 	}
 }
+
+func TestSearchMatch_InvalidRange(t *testing.T) {
+	svc := NewService(nil)
+
+	_, err := svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u1",
+		GameMode: "classic",
+		MinStake: 20,
+		MaxStake: 10,
+	}, NewChessEngine())
+	if err != ErrInvalidStakeRange {
+		t.Fatalf("expected ErrInvalidStakeRange, got %v", err)
+	}
+}
+
+func TestSearchMatch_FirstPlayerQueued(t *testing.T) {
+	svc := NewService(nil)
+
+	result, err := svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u1",
+		GameMode: "classic",
+		MinStake: 10,
+		MaxStake: 50,
+	}, NewChessEngine())
+	if err != nil {
+		t.Fatalf("search match failed: %v", err)
+	}
+
+	if result.Status != "queued" {
+		t.Fatalf("expected queued status, got %q", result.Status)
+	}
+	if result.GameMode != "classic" {
+		t.Fatalf("expected classic mode, got %q", result.GameMode)
+	}
+}
+
+func TestSearchMatch_RequiresSameModeAndOverlappingRange(t *testing.T) {
+	svc := NewService(nil)
+
+	_, err := svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u1",
+		GameMode: "meme",
+		MinStake: 10,
+		MaxStake: 30,
+	}, NewChessEngine())
+	if err != nil {
+		t.Fatalf("queue first player: %v", err)
+	}
+
+	result, err := svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u2",
+		GameMode: "classic",
+		MinStake: 15,
+		MaxStake: 25,
+	}, NewChessEngine())
+	if err != nil {
+		t.Fatalf("search second player: %v", err)
+	}
+	if result.Status != "queued" {
+		t.Fatalf("expected queued when mode differs, got %q", result.Status)
+	}
+
+	result, err = svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u3",
+		GameMode: "meme",
+		MinStake: 31,
+		MaxStake: 60,
+	}, NewChessEngine())
+	if err != nil {
+		t.Fatalf("search third player: %v", err)
+	}
+	if result.Status != "queued" {
+		t.Fatalf("expected queued when ranges do not overlap, got %q", result.Status)
+	}
+}
+
+func TestSearchMatch_MatchesOnOverlap(t *testing.T) {
+	svc := NewService(nil)
+
+	_, err := svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u1",
+		GameMode: "meme",
+		MinStake: 10,
+		MaxStake: 50,
+	}, NewChessEngine())
+	if err != nil {
+		t.Fatalf("queue first player: %v", err)
+	}
+
+	result, err := svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u2",
+		GameMode: "meme",
+		MinStake: 40,
+		MaxStake: 100,
+	}, NewChessEngine())
+	if err != nil {
+		t.Fatalf("match second player: %v", err)
+	}
+
+	if result.Status != "matched" {
+		t.Fatalf("expected matched status, got %q", result.Status)
+	}
+	if result.GameID == "" {
+		t.Fatal("expected non-empty game id")
+	}
+	if result.AgreedStake != 40 {
+		t.Fatalf("expected agreed stake 40, got %d", result.AgreedStake)
+	}
+	if result.GameMode != "meme" {
+		t.Fatalf("expected meme mode, got %q", result.GameMode)
+	}
+	if result.GameCurrency != "game_currency" {
+		t.Fatalf("expected game_currency marker, got %q", result.GameCurrency)
+	}
+
+	session, ok := svc.GetSession(result.GameID)
+	if !ok {
+		t.Fatalf("expected created session for game %q", result.GameID)
+	}
+	snapshot := session.Snapshot()
+	if snapshot.Player1ID != "u2" || snapshot.Player2ID != "u1" {
+		t.Fatalf("unexpected players in created game: p1=%q p2=%q", snapshot.Player1ID, snapshot.Player2ID)
+	}
+}

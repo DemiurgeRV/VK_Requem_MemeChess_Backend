@@ -17,7 +17,7 @@ type Cache struct {
 	db *sql.DB
 }
 
-func NewCache() *Cache {
+func NewSQLiteCache() *Cache {
 	cache, err := newCache("file:analysis-cache?mode=memory&cache=shared")
 	if err != nil {
 		panic(err)
