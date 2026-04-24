@@ -1,0 +1,8 @@
+./engine.go
+./helpers.go
+./move_ordering.go
+./node.go
+./quiescence.go
+./static_evaluator.go
+./transposition_table.go
+./engine_test.go

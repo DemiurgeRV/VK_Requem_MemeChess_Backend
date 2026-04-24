@@ -1,0 +1,325 @@
+package rules
+
+import (
+	"meme_chess/internal/analyzer/position"
+)
+
+type ClassicalRuleSet struct{}
+
+func NewClassicalRuleSet() *ClassicalRuleSet {
+	return &ClassicalRuleSet{}
+}
+
+func (r *ClassicalRuleSet) IsLegalMove(gs *position.GameState, mv position.Move) error {
+	piece := gs.PieceAt(mv.From)
+	if piece.IsZero() {
+		return ErrNoPieceAtSource
+	}
+
+	if piece.Color != gs.SideToMove {
+		return ErrWrongSideToMove
+	}
+
+	dst := gs.PieceAt(mv.To)
+	if !dst.IsZero() && dst.Color == piece.Color {
+		return ErrDestinationOccupied
+	}
+
+	if err := r.validatePromotion(gs, mv, piece); err != nil {
+		return err
+	}
+
+	if !r.isPseudoLegal(gs, mv, piece) {
+		return ErrIllegalGeometry
+	}
+
+	clone := gs.Clone()
+	if err := clone.ApplyMove(mv); err != nil {
+		return err
+	}
+
+	if r.IsCheck(clone, piece.Color) {
+		return ErrKingLeftInCheck
+	}
+
+	if piece.Type == position.King && (mv.Kind == position.MoveCastleKingSide || mv.Kind == position.MoveCastleQueenSide) {
+		if err := r.validateCastlePath(gs, mv, piece.Color); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (r *ClassicalRuleSet) IsCheck(gs *position.GameState, color position.Color) bool {
+	kingSq, ok := findKing(gs, color)
+	if !ok {
+		return false
+	}
+
+	enemy := color.Opponent()
+	for i := 0; i < 64; i++ {
+		from := position.Square(i)
+		piece := gs.PieceAt(from)
+		if piece.IsZero() || piece.Color != enemy {
+			continue
+		}
+
+		if AttacksSquare(gs, from, kingSq, piece) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (r *ClassicalRuleSet) isPseudoLegal(gs *position.GameState, mv position.Move, piece position.Piece) bool {
+	fromFile, fromRank := mv.From.File(), mv.From.Rank()
+	toFile, toRank := mv.To.File(), mv.To.Rank()
+
+	df := toFile - fromFile
+	dr := toRank - fromRank
+
+	switch piece.Type {
+	case position.Pawn:
+		return isLegalPawnMove(gs, mv, piece.Color)
+	case position.Knight:
+		return (abs(df) == 1 && abs(dr) == 2) || (abs(df) == 2 && abs(dr) == 1)
+	case position.Bishop:
+		return abs(df) == abs(dr) && isPathClear(gs, mv.From, mv.To)
+	case position.Rook:
+		return (df == 0 || dr == 0) && isPathClear(gs, mv.From, mv.To)
+	case position.Queen:
+		return (df == 0 || dr == 0 || abs(df) == abs(dr)) && isPathClear(gs, mv.From, mv.To)
+	case position.King:
+		if mv.Kind == position.MoveCastleKingSide || mv.Kind == position.MoveCastleQueenSide {
+			return r.canCastleGeometry(gs, mv, piece.Color)
+		}
+		return abs(df) <= 1 && abs(dr) <= 1
+	default:
+		return false
+	}
+}
+
+func (r *ClassicalRuleSet) validatePromotion(gs *position.GameState, mv position.Move, piece position.Piece) error {
+	if piece.Type != position.Pawn {
+		if mv.Promotion != position.NoPieceType {
+			return ErrInvalidPromotion
+		}
+		return nil
+	}
+
+	lastRank := 7
+	if piece.Color == position.Black {
+		lastRank = 0
+	}
+
+	reachesLastRank := mv.To.Rank() == lastRank
+	if reachesLastRank && mv.Promotion == position.NoPieceType {
+		return ErrInvalidPromotion
+	}
+	if !reachesLastRank && mv.Promotion != position.NoPieceType {
+		return ErrInvalidPromotion
+	}
+	if mv.Promotion != position.NoPieceType {
+		switch mv.Promotion {
+		case position.Queen, position.Rook, position.Bishop, position.Knight:
+			return nil
+		default:
+			return ErrInvalidPromotion
+		}
+	}
+	return nil
+}
+
+func (r *ClassicalRuleSet) canCastleGeometry(gs *position.GameState, mv position.Move, color position.Color) bool {
+	if color == position.White {
+		if mv.From != position.MustSquare(4, 0) {
+			return false
+		}
+		if mv.Kind == position.MoveCastleKingSide {
+			if mv.To != position.MustSquare(6, 0) || !gs.CastlingRights.WhiteKingSide {
+				return false
+			}
+			return gs.PieceAt(position.MustSquare(5, 0)).IsZero() &&
+				gs.PieceAt(position.MustSquare(6, 0)).IsZero() &&
+				gs.PieceAt(position.MustSquare(7, 0)).Type == position.Rook
+		}
+		if mv.To != position.MustSquare(2, 0) || !gs.CastlingRights.WhiteQueenSide {
+			return false
+		}
+		return gs.PieceAt(position.MustSquare(1, 0)).IsZero() &&
+			gs.PieceAt(position.MustSquare(2, 0)).IsZero() &&
+			gs.PieceAt(position.MustSquare(3, 0)).IsZero() &&
+			gs.PieceAt(position.MustSquare(0, 0)).Type == position.Rook
+	}
+
+	if mv.From != position.MustSquare(4, 7) {
+		return false
+	}
+	if mv.Kind == position.MoveCastleKingSide {
+		if mv.To != position.MustSquare(6, 7) || !gs.CastlingRights.BlackKingSide {
+			return false
+		}
+		return gs.PieceAt(position.MustSquare(5, 7)).IsZero() &&
+			gs.PieceAt(position.MustSquare(6, 7)).IsZero() &&
+			gs.PieceAt(position.MustSquare(7, 7)).Type == position.Rook
+	}
+	if mv.To != position.MustSquare(2, 7) || !gs.CastlingRights.BlackQueenSide {
+		return false
+	}
+	return gs.PieceAt(position.MustSquare(1, 7)).IsZero() &&
+		gs.PieceAt(position.MustSquare(2, 7)).IsZero() &&
+		gs.PieceAt(position.MustSquare(3, 7)).IsZero() &&
+		gs.PieceAt(position.MustSquare(0, 7)).Type == position.Rook
+}
+
+func (r *ClassicalRuleSet) validateCastlePath(gs *position.GameState, mv position.Move, color position.Color) error {
+	if r.IsCheck(gs, color) {
+		return ErrIllegalCastle
+	}
+
+	var path []position.Square
+	if color == position.White {
+		if mv.Kind == position.MoveCastleKingSide {
+			path = []position.Square{position.MustSquare(5, 0), position.MustSquare(6, 0)}
+		} else {
+			path = []position.Square{position.MustSquare(3, 0), position.MustSquare(2, 0)}
+		}
+	} else {
+		if mv.Kind == position.MoveCastleKingSide {
+			path = []position.Square{position.MustSquare(5, 7), position.MustSquare(6, 7)}
+		} else {
+			path = []position.Square{position.MustSquare(3, 7), position.MustSquare(2, 7)}
+		}
+	}
+
+	for _, sq := range path {
+		tmp := gs.Clone()
+		king := tmp.PieceAt(mv.From)
+		tmp.SetPiece(mv.From, position.Piece{})
+		tmp.SetPiece(sq, king)
+		if r.IsCheck(tmp, color) {
+			return ErrIllegalCastle
+		}
+	}
+
+	return nil
+}
+
+func findKing(gs *position.GameState, color position.Color) (position.Square, bool) {
+	for i := 0; i < 64; i++ {
+		sq := position.Square(i)
+		piece := gs.PieceAt(sq)
+		if !piece.IsZero() && piece.Color == color && piece.Type == position.King {
+			return sq, true
+		}
+	}
+	return position.NoSquare, false
+}
+
+func AttacksSquare(gs *position.GameState, from, to position.Square, piece position.Piece) bool {
+	df := to.File() - from.File()
+	dr := to.Rank() - from.Rank()
+
+	switch piece.Type {
+	case position.Pawn:
+		if piece.Color == position.White {
+			return dr == 1 && (df == 1 || df == -1)
+		}
+		return dr == -1 && (df == 1 || df == -1)
+	case position.Knight:
+		return (abs(df) == 1 && abs(dr) == 2) || (abs(df) == 2 && abs(dr) == 1)
+	case position.Bishop:
+		return abs(df) == abs(dr) && isPathClear(gs, from, to)
+	case position.Rook:
+		return (df == 0 || dr == 0) && isPathClear(gs, from, to)
+	case position.Queen:
+		return (df == 0 || dr == 0 || abs(df) == abs(dr)) && isPathClear(gs, from, to)
+	case position.King:
+		return abs(df) <= 1 && abs(dr) <= 1
+	default:
+		return false
+	}
+}
+
+func isLegalPawnMove(gs *position.GameState, mv position.Move, color position.Color) bool {
+	fromFile, fromRank := mv.From.File(), mv.From.Rank()
+	toFile, toRank := mv.To.File(), mv.To.Rank()
+
+	df := toFile - fromFile
+	dr := toRank - fromRank
+	dst := gs.PieceAt(mv.To)
+
+	if color == position.White {
+		if df == 0 && dr == 1 && dst.IsZero() {
+			return true
+		}
+		if df == 0 && dr == 2 && fromRank == 1 && dst.IsZero() {
+			mid := position.MustSquare(fromFile, fromRank+1)
+			return gs.PieceAt(mid).IsZero()
+		}
+		if abs(df) == 1 && dr == 1 && !dst.IsZero() && dst.Color == position.Black {
+			return true
+		}
+		if abs(df) == 1 && dr == 1 && mv.To == gs.EnPassant {
+			capSq := position.MustSquare(toFile, toRank-1)
+			p := gs.PieceAt(capSq)
+			return p.Type == position.Pawn && p.Color == position.Black
+		}
+		return false
+	}
+
+	if df == 0 && dr == -1 && dst.IsZero() {
+		return true
+	}
+	if df == 0 && dr == -2 && fromRank == 6 && dst.IsZero() {
+		mid := position.MustSquare(fromFile, fromRank-1)
+		return gs.PieceAt(mid).IsZero()
+	}
+	if abs(df) == 1 && dr == -1 && !dst.IsZero() && dst.Color == position.White {
+		return true
+	}
+	if abs(df) == 1 && dr == -1 && mv.To == gs.EnPassant {
+		capSq := position.MustSquare(toFile, toRank+1)
+		p := gs.PieceAt(capSq)
+		return p.Type == position.Pawn && p.Color == position.White
+	}
+	return false
+}
+
+func isPathClear(gs *position.GameState, from, to position.Square) bool {
+	df := sign(to.File() - from.File())
+	dr := sign(to.Rank() - from.Rank())
+
+	f := from.File() + df
+	r := from.Rank() + dr
+
+	for f != to.File() || r != to.Rank() {
+		sq := position.MustSquare(f, r)
+		if !gs.PieceAt(sq).IsZero() {
+			return false
+		}
+		f += df
+		r += dr
+	}
+
+	return true
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+func sign(x int) int {
+	if x < 0 {
+		return -1
+	}
+	if x > 0 {
+		return 1
+	}
+	return 0
+}

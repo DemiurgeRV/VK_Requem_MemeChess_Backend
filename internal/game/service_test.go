@@ -3,6 +3,7 @@ package game
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func newTestServiceWithGame() *Service {
@@ -114,6 +115,70 @@ func TestInviteThirdPlayerRejected(t *testing.T) {
 	}
 }
 
+func TestReserveInviteSeatKeepsGameWaitingUntilSocketJoin(t *testing.T) {
+	svc := NewService(nil)
+
+	gameID, err := svc.CreateInviteGame(context.Background(), "host", NewChessEngine())
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	hostState, err := svc.JoinGame(context.Background(), gameID, "host")
+	if err != nil {
+		t.Fatalf("host join: %v", err)
+	}
+	if hostState.Status != string(StatusWaiting) {
+		t.Fatalf("expected waiting while host is alone, got %s", hostState.Status)
+	}
+
+	reservedState, err := svc.ReserveInviteSeat(context.Background(), gameID, "guest")
+	if err != nil {
+		t.Fatalf("reserve invite seat: %v", err)
+	}
+	if reservedState.Player2ID != "guest" {
+		t.Fatalf("expected reserved guest in second seat, got %q", reservedState.Player2ID)
+	}
+	if reservedState.Status != string(StatusWaiting) {
+		t.Fatalf("expected waiting after reserve, got %s", reservedState.Status)
+	}
+
+	joinedState, err := svc.JoinGame(context.Background(), gameID, "guest")
+	if err != nil {
+		t.Fatalf("guest socket join: %v", err)
+	}
+	if joinedState.Status != string(StatusActive) {
+		t.Fatalf("expected active after guest websocket join, got %s", joinedState.Status)
+	}
+}
+
+func TestReserveInviteSeatRejectsExpiredInvite(t *testing.T) {
+	svc := NewService(nil)
+
+	gameID, err := svc.CreateInviteGame(context.Background(), "host", NewChessEngine())
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	session, ok := svc.GetSession(gameID)
+	if !ok {
+		t.Fatal("expected invite session")
+	}
+
+	session.mu.Lock()
+	session.InviteExpiresAt = time.Now().Add(-time.Minute)
+	session.mu.Unlock()
+
+	_, err = svc.ReserveInviteSeat(context.Background(), gameID, "guest")
+	if err != ErrInviteExpired {
+		t.Fatalf("expected ErrInviteExpired, got %v", err)
+	}
+
+	_, err = svc.JoinGame(context.Background(), gameID, "guest")
+	if err != ErrInviteExpired {
+		t.Fatalf("expected websocket join to fail with ErrInviteExpired, got %v", err)
+	}
+}
+
 func TestMoveTurnOrder(t *testing.T) {
 	svc := newTestServiceWithGame()
 	activateGame(t, svc)
@@ -193,5 +258,101 @@ func TestCheckmate_FoolsMate(t *testing.T) {
 
 	if state.FinishedReason != "checkmate" {
 		t.Fatalf("expected finished reason checkmate, got %s", state.FinishedReason)
+	}
+}
+
+func TestGameTracksVariantRootOnCreate(t *testing.T) {
+	svc := newTestServiceWithGame()
+
+	session, ok := svc.GetSession("game-123")
+	if !ok {
+		t.Fatal("expected game session to exist")
+	}
+
+	state := session.Snapshot()
+	if state.RootPositionHash == "" {
+		t.Fatal("expected root position hash to be initialized")
+	}
+	if state.CurrentPositionHash != state.RootPositionHash {
+		t.Fatalf("expected current position hash to start at root, got root=%q current=%q", state.RootPositionHash, state.CurrentPositionHash)
+	}
+	if state.VariantPly != 0 {
+		t.Fatalf("expected variant ply 0, got %d", state.VariantPly)
+	}
+}
+
+func TestParallelGamesTrackIndependentVariantCursor(t *testing.T) {
+	svc := NewService(nil)
+
+	_, err := svc.CreateGame(context.Background(), "game-1", "user1", "user2", NewChessEngine())
+	if err != nil {
+		t.Fatalf("create game-1: %v", err)
+	}
+	_, err = svc.CreateGame(context.Background(), "game-2", "user3", "user4", NewChessEngine())
+	if err != nil {
+		t.Fatalf("create game-2: %v", err)
+	}
+
+	_, _ = svc.JoinGame(context.Background(), "game-1", "user1")
+	_, _ = svc.JoinGame(context.Background(), "game-1", "user2")
+	_, _ = svc.JoinGame(context.Background(), "game-2", "user3")
+	_, _ = svc.JoinGame(context.Background(), "game-2", "user4")
+
+	state1, _, err := svc.MakeMove(context.Background(), "game-1", "user1", "e2e4")
+	if err != nil {
+		t.Fatalf("game-1 move: %v", err)
+	}
+
+	session2, ok := svc.GetSession("game-2")
+	if !ok {
+		t.Fatal("expected second game session")
+	}
+	state2 := session2.Snapshot()
+
+	if state1.CurrentPositionHash == state1.RootPositionHash {
+		t.Fatal("expected first game cursor to move away from root")
+	}
+	if state2.CurrentPositionHash != state2.RootPositionHash {
+		t.Fatalf("expected second game to stay on root, got root=%q current=%q", state2.RootPositionHash, state2.CurrentPositionHash)
+	}
+	if state1.CurrentPositionHash == state2.CurrentPositionHash {
+		t.Fatal("expected parallel games with different progress to have different current position hashes")
+	}
+}
+
+func TestParallelGamesShareCommonVariantNodeForSamePosition(t *testing.T) {
+	svc := NewService(nil)
+
+	_, err := svc.CreateGame(context.Background(), "game-a", "user1", "user2", NewChessEngine())
+	if err != nil {
+		t.Fatalf("create game-a: %v", err)
+	}
+	_, err = svc.CreateGame(context.Background(), "game-b", "user3", "user4", NewChessEngine())
+	if err != nil {
+		t.Fatalf("create game-b: %v", err)
+	}
+
+	_, _ = svc.JoinGame(context.Background(), "game-a", "user1")
+	_, _ = svc.JoinGame(context.Background(), "game-a", "user2")
+	_, _ = svc.JoinGame(context.Background(), "game-b", "user3")
+	_, _ = svc.JoinGame(context.Background(), "game-b", "user4")
+
+	stateA, _, err := svc.MakeMove(context.Background(), "game-a", "user1", "e2e4")
+	if err != nil {
+		t.Fatalf("game-a move: %v", err)
+	}
+	stateB, _, err := svc.MakeMove(context.Background(), "game-b", "user3", "e2e4")
+	if err != nil {
+		t.Fatalf("game-b move: %v", err)
+	}
+
+	if stateA.RootPositionHash != stateB.RootPositionHash {
+		t.Fatalf("expected identical games to share root hash, got %q vs %q", stateA.RootPositionHash, stateB.RootPositionHash)
+	}
+	if stateA.CurrentPositionHash != stateB.CurrentPositionHash {
+		t.Fatalf("expected identical resulting positions to share current hash, got %q vs %q", stateA.CurrentPositionHash, stateB.CurrentPositionHash)
+	}
+	if stateA.VariantPly != 1 || stateB.VariantPly != 1 {
+		t.Fatalf("expected both games to be at ply 1, got %d and %d", stateA.VariantPly, stateB.VariantPly)
 	}
 }

@@ -22,6 +22,8 @@ type User struct {
 	ID           string
 	Email        *string
 	Username     string
+	AvatarURL    *string
+	CreatedAt    time.Time
 	PasswordHash string
 }
 
@@ -48,14 +50,21 @@ func (r *Repository) GetByLogin(ctx context.Context, login string) (*User, error
 	defer cancel()
 
 	const q = `
-		SELECT id::text, email, username, password_hash
+		SELECT id::text, email, username, avatar_url, created_at, password_hash
 		FROM users
 		WHERE lower(username) = lower($1)
 		   OR (email IS NOT NULL AND lower(email) = lower($1))
 	`
 
 	var u User
-	err := r.pool.QueryRow(ctx, q, login).Scan(&u.ID, &u.Email, &u.Username, &u.PasswordHash)
+	err := r.pool.QueryRow(ctx, q, login).Scan(
+		&u.ID,
+		&u.Email,
+		&u.Username,
+		&u.AvatarURL,
+		&u.CreatedAt,
+		&u.PasswordHash,
+	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -70,13 +79,20 @@ func (r *Repository) GetByID(ctx context.Context, id string) (*User, error) {
 	defer cancel()
 
 	const q = `
-		SELECT id::text, email, username, password_hash
+		SELECT id::text, email, username, avatar_url, created_at, password_hash
 		FROM users
 		WHERE id = $1
 	`
 
 	var u User
-	err := r.pool.QueryRow(ctx, q, id).Scan(&u.ID, &u.Email, &u.Username, &u.PasswordHash)
+	err := r.pool.QueryRow(ctx, q, id).Scan(
+		&u.ID,
+		&u.Email,
+		&u.Username,
+		&u.AvatarURL,
+		&u.CreatedAt,
+		&u.PasswordHash,
+	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
