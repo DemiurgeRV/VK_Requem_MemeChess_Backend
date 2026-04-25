@@ -309,6 +309,22 @@ func (h *HTTP) PostMatchSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (h *HTTP) PostMatchSearchLeave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	participant, err := h.AuthService.UserFromBearer(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+
+	result := h.Svc.LeaveMatchSearch(participant.ID)
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h *HTTP) resolveInviteParticipant(r *http.Request) (string, *user.User, error) {
 	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
 	if authorization == "" {

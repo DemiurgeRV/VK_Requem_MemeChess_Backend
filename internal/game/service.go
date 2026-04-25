@@ -87,6 +87,10 @@ type MatchSearchResult struct {
 	GameMode     string `json:"game_mode,omitempty"`
 }
 
+type MatchSearchLeaveResult struct {
+	Status string `json:"status"`
+}
+
 type matchRequest struct {
 	UserID   string
 	GameMode string
@@ -256,6 +260,25 @@ func (s *Service) SearchMatch(ctx context.Context, in MatchSearchInput, engine E
 		GameCurrency: "game_currency",
 		GameMode:     mode,
 	}, nil
+}
+
+func (s *Service) LeaveMatchSearch(userID string) MatchSearchLeaveResult {
+	if strings.TrimSpace(userID) == "" {
+		return MatchSearchLeaveResult{Status: "idle"}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.matchQueue {
+		if s.matchQueue[i].UserID != userID {
+			continue
+		}
+		s.matchQueue = append(s.matchQueue[:i], s.matchQueue[i+1:]...)
+		return MatchSearchLeaveResult{Status: "cancelled"}
+	}
+
+	return MatchSearchLeaveResult{Status: "idle"}
 }
 
 func (s *Service) createMatchedGame(ctx context.Context, player1ID, player2ID string, stake int64, mode string, engine Engine) (string, error) {

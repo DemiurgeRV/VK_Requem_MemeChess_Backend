@@ -30,6 +30,11 @@ type authResponse struct {
 	User  userPublic `json:"user"`
 }
 
+type currencyResponse struct {
+	ShopFunds int64 `json:"shop_funds"`
+	GameFunds int64 `json:"game_funds"`
+}
+
 type userPublic struct {
 	ID        string     `json:"id"`
 	Username  string     `json:"username"`
@@ -162,6 +167,31 @@ func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handlers) Currency(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	u, err := h.Service.UserFromBearer(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrMissingToken):
+			writeError(w, http.StatusUnauthorized, err.Error())
+		case errors.Is(err, ErrInvalidToken):
+			writeError(w, http.StatusUnauthorized, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "failed to load user currency")
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, currencyResponse{
+		ShopFunds: u.ShopCurrency,
+		GameFunds: u.GameCurrency,
+	})
 }
 
 func buildUserPublic(u *user.User) userPublic {

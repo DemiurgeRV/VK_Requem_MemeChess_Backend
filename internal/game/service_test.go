@@ -480,3 +480,45 @@ func TestSearchMatch_MatchesOnOverlap(t *testing.T) {
 		t.Fatalf("unexpected players in created game: p1=%q p2=%q", snapshot.Player1ID, snapshot.Player2ID)
 	}
 }
+
+func TestLeaveMatchSearch_RemovesQueuedPlayer(t *testing.T) {
+	svc := NewService(nil)
+
+	_, err := svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u1",
+		GameMode: "classic",
+		MinStake: 10,
+		MaxStake: 50,
+	}, NewChessEngine())
+	if err != nil {
+		t.Fatalf("queue player: %v", err)
+	}
+
+	result := svc.LeaveMatchSearch("u1")
+	if result.Status != "cancelled" {
+		t.Fatalf("expected cancelled status, got %q", result.Status)
+	}
+
+	// If u1 was removed from queue, u2 should not be matched and should become queued.
+	next, err := svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u2",
+		GameMode: "classic",
+		MinStake: 10,
+		MaxStake: 50,
+	}, NewChessEngine())
+	if err != nil {
+		t.Fatalf("search after leave: %v", err)
+	}
+	if next.Status != "queued" {
+		t.Fatalf("expected queued after previous player left queue, got %q", next.Status)
+	}
+}
+
+func TestLeaveMatchSearch_IdleWhenNotQueued(t *testing.T) {
+	svc := NewService(nil)
+
+	result := svc.LeaveMatchSearch("unknown")
+	if result.Status != "idle" {
+		t.Fatalf("expected idle status, got %q", result.Status)
+	}
+}

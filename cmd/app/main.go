@@ -45,10 +45,12 @@ func registerAuthRoutes(h *auth.Handlers) {
 		{path: "/auth/register", handler: h.Register},
 		{path: "/auth/login", handler: h.Login},
 		{path: "/auth/me", handler: h.Me},
+		{path: "/auth/currency", handler: h.Currency},
 		{path: "/auth/logout", handler: h.Logout},
 		{path: "/api/v1/auth/register", handler: h.Register},
 		{path: "/api/v1/auth/login", handler: h.Login},
 		{path: "/api/v1/auth/me", handler: h.Me},
+		{path: "/api/v1/auth/currency", handler: h.Currency},
 		{path: "/api/v1/auth/logout", handler: h.Logout},
 	}
 
@@ -95,6 +97,7 @@ func main() {
 	http.Handle("/api/v1/", analyzerHTTP)
 	http.HandleFunc("/api/v1/games/invite", gameHTTP.PostInvite)
 	http.HandleFunc("/api/v1/games/match-search", gameHTTP.PostMatchSearch)
+	http.HandleFunc("/api/v1/games/match-search/leave", gameHTTP.PostMatchSearchLeave)
 	http.HandleFunc("/api/v1/games/", func(w http.ResponseWriter, r *http.Request) {
 		rest := strings.TrimPrefix(r.URL.Path, "/api/v1/games/")
 		rest = strings.Trim(rest, "/")
