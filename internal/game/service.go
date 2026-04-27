@@ -87,6 +87,18 @@ type MatchSearchResult struct {
 	GameMode     string `json:"game_mode,omitempty"`
 }
 
+type MatchSearchPreviewInput struct {
+	UserID   string
+	GameMode string
+	MinStake int64
+	MaxStake int64
+}
+
+type MatchSearchPreviewResult struct {
+	MatchedUsersCount int64  `json:"matched_users_count"`
+	GameMode          string `json:"game_mode"`
+}
+
 type MatchSearchLeaveResult struct {
 	Status string `json:"status"`
 }
@@ -259,6 +271,38 @@ func (s *Service) SearchMatch(ctx context.Context, in MatchSearchInput, engine E
 		AgreedStake:  agreedStake,
 		GameCurrency: "game_currency",
 		GameMode:     mode,
+	}, nil
+}
+
+func (s *Service) PreviewMatchSearch(in MatchSearchPreviewInput) (MatchSearchPreviewResult, error) {
+	mode := normalizeGameMode(in.GameMode)
+	if in.MinStake <= 0 || in.MaxStake < in.MinStake || mode == "" {
+		return MatchSearchPreviewResult{}, ErrInvalidStakeRange
+	}
+
+	userID := strings.TrimSpace(in.UserID)
+	var count int64
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for i := range s.matchQueue {
+		waiting := s.matchQueue[i]
+		if userID != "" && waiting.UserID == userID {
+			continue
+		}
+		if waiting.GameMode != mode {
+			continue
+		}
+		if !rangesOverlap(waiting.MinStake, waiting.MaxStake, in.MinStake, in.MaxStake) {
+			continue
+		}
+		count++
+	}
+
+	return MatchSearchPreviewResult{
+		MatchedUsersCount: count,
+		GameMode:          mode,
 	}, nil
 }
 

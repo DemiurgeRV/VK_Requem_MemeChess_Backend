@@ -522,3 +522,80 @@ func TestLeaveMatchSearch_IdleWhenNotQueued(t *testing.T) {
 		t.Fatalf("expected idle status, got %q", result.Status)
 	}
 }
+
+func TestPreviewMatchSearch_CountsOverlappingUsersWithSameMode(t *testing.T) {
+	svc := NewService(nil)
+
+	_, _ = svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u1",
+		GameMode: "classic",
+		MinStake: 10,
+		MaxStake: 20,
+	}, NewChessEngine())
+	_, _ = svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u2",
+		GameMode: "classic",
+		MinStake: 30,
+		MaxStake: 40,
+	}, NewChessEngine())
+	_, _ = svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u3",
+		GameMode: "meme",
+		MinStake: 10,
+		MaxStake: 100,
+	}, NewChessEngine())
+
+	preview, err := svc.PreviewMatchSearch(MatchSearchPreviewInput{
+		UserID:   "u4",
+		GameMode: "classic",
+		MinStake: 15,
+		MaxStake: 35,
+	})
+	if err != nil {
+		t.Fatalf("preview failed: %v", err)
+	}
+	if preview.GameMode != "classic" {
+		t.Fatalf("expected classic mode, got %q", preview.GameMode)
+	}
+	if preview.MatchedUsersCount != 2 {
+		t.Fatalf("expected 2 matched users, got %d", preview.MatchedUsersCount)
+	}
+}
+
+func TestPreviewMatchSearch_ExcludesCurrentUserQueueEntry(t *testing.T) {
+	svc := NewService(nil)
+
+	_, _ = svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u1",
+		GameMode: "classic",
+		MinStake: 10,
+		MaxStake: 50,
+	}, NewChessEngine())
+
+	preview, err := svc.PreviewMatchSearch(MatchSearchPreviewInput{
+		UserID:   "u1",
+		GameMode: "classic",
+		MinStake: 10,
+		MaxStake: 50,
+	})
+	if err != nil {
+		t.Fatalf("preview failed: %v", err)
+	}
+	if preview.MatchedUsersCount != 0 {
+		t.Fatalf("expected 0 matched users when only self is queued, got %d", preview.MatchedUsersCount)
+	}
+}
+
+func TestPreviewMatchSearch_InvalidRange(t *testing.T) {
+	svc := NewService(nil)
+
+	_, err := svc.PreviewMatchSearch(MatchSearchPreviewInput{
+		UserID:   "u1",
+		GameMode: "classic",
+		MinStake: 50,
+		MaxStake: 10,
+	})
+	if err != ErrInvalidStakeRange {
+		t.Fatalf("expected ErrInvalidStakeRange, got %v", err)
+	}
+}

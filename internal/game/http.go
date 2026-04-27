@@ -309,6 +309,43 @@ func (h *HTTP) PostMatchSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (h *HTTP) PostMatchSearchPreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	participant, err := h.AuthService.UserFromBearer(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+
+	var req matchSearchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+
+	result, err := h.Svc.PreviewMatchSearch(MatchSearchPreviewInput{
+		UserID:   participant.ID,
+		GameMode: req.GameMode,
+		MinStake: req.MinStake,
+		MaxStake: req.MaxStake,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidStakeRange):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid game_mode or stake range"})
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to preview match search"})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h *HTTP) PostMatchSearchLeave(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
