@@ -481,6 +481,96 @@ func TestSearchMatch_MatchesOnOverlap(t *testing.T) {
 	}
 }
 
+func TestSearchMatch_ReturnsPendingMatchToFirstPlayer(t *testing.T) {
+	svc := NewService(nil)
+
+	_, err := svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u1",
+		GameMode: "meme",
+		MinStake: 10,
+		MaxStake: 50,
+	}, NewChessEngine())
+	if err != nil {
+		t.Fatalf("queue first player: %v", err)
+	}
+
+	secondResult, err := svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u2",
+		GameMode: "meme",
+		MinStake: 40,
+		MaxStake: 100,
+	}, NewChessEngine())
+	if err != nil {
+		t.Fatalf("match second player: %v", err)
+	}
+
+	firstResult, err := svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u1",
+		GameMode: "meme",
+		MinStake: 10,
+		MaxStake: 50,
+	}, NewChessEngine())
+	if err != nil {
+		t.Fatalf("resume first player polling: %v", err)
+	}
+
+	if firstResult.Status != "matched" {
+		t.Fatalf("expected matched status for first player, got %q", firstResult.Status)
+	}
+	if firstResult.GameID != secondResult.GameID {
+		t.Fatalf("expected same game id for both players, got first=%q second=%q", firstResult.GameID, secondResult.GameID)
+	}
+	if firstResult.AgreedStake != secondResult.AgreedStake {
+		t.Fatalf("expected same agreed stake, got first=%d second=%d", firstResult.AgreedStake, secondResult.AgreedStake)
+	}
+	if firstResult.GameMode != secondResult.GameMode {
+		t.Fatalf("expected same game mode, got first=%q second=%q", firstResult.GameMode, secondResult.GameMode)
+	}
+}
+
+func TestLeaveMatchSearch_ClearsPendingMatch(t *testing.T) {
+	svc := NewService(nil)
+
+	_, err := svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u1",
+		GameMode: "classic",
+		MinStake: 10,
+		MaxStake: 50,
+	}, NewChessEngine())
+	if err != nil {
+		t.Fatalf("queue first player: %v", err)
+	}
+
+	_, err = svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u2",
+		GameMode: "classic",
+		MinStake: 10,
+		MaxStake: 50,
+	}, NewChessEngine())
+	if err != nil {
+		t.Fatalf("match second player: %v", err)
+	}
+
+	cancelResult := svc.LeaveMatchSearch("u1")
+	if cancelResult.Status != "idle" {
+		t.Fatalf("expected idle when clearing pending match, got %q", cancelResult.Status)
+	}
+
+	nextResult, err := svc.SearchMatch(context.Background(), MatchSearchInput{
+		UserID:   "u1",
+		GameMode: "classic",
+		MinStake: 10,
+		MaxStake: 50,
+	}, NewChessEngine())
+	if err != nil {
+		t.Fatalf("restart search after clearing pending match: %v", err)
+	}
+
+	if nextResult.Status != "queued" {
+		t.Fatalf("expected queued after clearing pending match, got %q", nextResult.Status)
+	}
+}
+
 func TestLeaveMatchSearch_RemovesQueuedPlayer(t *testing.T) {
 	svc := NewService(nil)
 

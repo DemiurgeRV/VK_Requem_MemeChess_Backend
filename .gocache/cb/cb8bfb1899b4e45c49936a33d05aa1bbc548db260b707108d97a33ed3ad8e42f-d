@@ -1,6 +1,0 @@
-./fen.go
-./hash.go
-./move.go
-./state.go
-./types.go
-./state_test.go

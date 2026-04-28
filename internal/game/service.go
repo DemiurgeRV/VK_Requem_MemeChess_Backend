@@ -14,40 +14,40 @@ import (
 )
 
 var (
-	ErrGameNotFound  = errors.New("game not found")
-	ErrForbidden     = errors.New("forbidden")
-	ErrGameFull      = errors.New("game room is full")
-	ErrNotYourTurn   = errors.New("not your turn")
-	ErrGameFinished  = errors.New("game already finished")
-	ErrGameNotActive = errors.New("game is not active")
-	ErrInvalidMove   = errors.New("invalid move")
-	ErrInviteExpired = errors.New("invite token expired")
-	ErrInviteUsed    = errors.New("invite token already used")
-	ErrInviteOwnGame = errors.New("host cannot join own invite")
+	ErrGameNotFound      = errors.New("game not found")
+	ErrForbidden         = errors.New("forbidden")
+	ErrGameFull          = errors.New("game room is full")
+	ErrNotYourTurn       = errors.New("not your turn")
+	ErrGameFinished      = errors.New("game already finished")
+	ErrGameNotActive     = errors.New("game is not active")
+	ErrInvalidMove       = errors.New("invalid move")
+	ErrInviteExpired     = errors.New("invite token expired")
+	ErrInviteUsed        = errors.New("invite token already used")
+	ErrInviteOwnGame     = errors.New("host cannot join own invite")
 	ErrInvalidStakeRange = errors.New("invalid stake range")
 )
 
 const defaultInviteTTL = 15 * time.Minute
 
 type State struct {
-	GameID              string `json:"game_id"`
-	Player1ID           string `json:"player1_id"`
-	Player2ID           string `json:"player2_id"`
-	Player1Connected    bool   `json:"player1_connected"`
-	Player2Connected    bool   `json:"player2_connected"`
-	Status              string `json:"status"`
-	CurrentTurnUserID   string `json:"current_turn_user_id"`
-	BetAmount           int64  `json:"bet_amount,omitempty"`
-	DrawOfferedBy       string `json:"draw_offered_by,omitempty"`
+	GameID              string    `json:"game_id"`
+	Player1ID           string    `json:"player1_id"`
+	Player2ID           string    `json:"player2_id"`
+	Player1Connected    bool      `json:"player1_connected"`
+	Player2Connected    bool      `json:"player2_connected"`
+	Status              string    `json:"status"`
+	CurrentTurnUserID   string    `json:"current_turn_user_id"`
+	BetAmount           int64     `json:"bet_amount,omitempty"`
+	DrawOfferedBy       string    `json:"draw_offered_by,omitempty"`
 	DrawOfferedAt       time.Time `json:"draw_offered_at,omitempty"`
-	FEN                 string `json:"fen"`
-	LastMove            string `json:"last_move"`
-	WinnerID            string `json:"winner_id,omitempty"`
-	FinishedReason      string `json:"finished_reason,omitempty"`
-	RootPositionHash    string `json:"root_position_hash"`
-	CurrentPositionHash string `json:"current_position_hash"`
-	VariantPly          int    `json:"variant_ply"`
-	Moves               []Move `json:"moves"`
+	FEN                 string    `json:"fen"`
+	LastMove            string    `json:"last_move"`
+	WinnerID            string    `json:"winner_id,omitempty"`
+	FinishedReason      string    `json:"finished_reason,omitempty"`
+	RootPositionHash    string    `json:"root_position_hash"`
+	CurrentPositionHash string    `json:"current_position_hash"`
+	VariantPly          int       `json:"variant_ply"`
+	Moves               []Move    `json:"moves"`
 }
 
 type Service struct {
@@ -56,6 +56,7 @@ type Service struct {
 	repository     *Repository
 	userRepo       *user.Repository
 	matchQueue     []matchRequest
+	pendingMatches map[string]MatchSearchResult
 	variantTracker *tree.Tracker
 	moveAnalyzer   MoveAnalyzer
 }
@@ -65,6 +66,7 @@ func NewService(repository *Repository) *Service {
 		sessions:       make(map[string]*Session),
 		repository:     repository,
 		matchQueue:     make([]matchRequest, 0, 32),
+		pendingMatches: make(map[string]MatchSearchResult),
 		variantTracker: tree.NewTracker(),
 	}
 }
@@ -203,6 +205,11 @@ func (s *Service) SearchMatch(ctx context.Context, in MatchSearchInput, engine E
 	}
 
 	s.mu.Lock()
+	if pendingResult, ok := s.pendingMatches[in.UserID]; ok {
+		s.mu.Unlock()
+		return pendingResult, nil
+	}
+
 	for i := range s.matchQueue {
 		waiting := s.matchQueue[i]
 		if waiting.UserID == in.UserID {
@@ -268,13 +275,19 @@ func (s *Service) SearchMatch(ctx context.Context, in MatchSearchInput, engine E
 		return MatchSearchResult{}, err
 	}
 
-	return MatchSearchResult{
+	result := MatchSearchResult{
 		Status:       "matched",
 		GameID:       gameID,
 		AgreedStake:  agreedStake,
 		GameCurrency: "game_currency",
 		GameMode:     mode,
-	}, nil
+	}
+
+	s.mu.Lock()
+	s.pendingMatches[waiting.UserID] = result
+	s.mu.Unlock()
+
+	return result, nil
 }
 
 func (s *Service) PreviewMatchSearch(in MatchSearchPreviewInput) (MatchSearchPreviewResult, error) {
@@ -316,6 +329,7 @@ func (s *Service) LeaveMatchSearch(userID string) MatchSearchLeaveResult {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	delete(s.pendingMatches, userID)
 
 	for i := range s.matchQueue {
 		if s.matchQueue[i].UserID != userID {
@@ -418,6 +432,9 @@ func (s *Service) JoinGame(ctx context.Context, gameID, userID string) (State, e
 	}
 
 	if session.HasPlayer(userID) {
+		s.mu.Lock()
+		delete(s.pendingMatches, userID)
+		s.mu.Unlock()
 		session.SetConnected(userID, true)
 		return session.Snapshot(), nil
 	}
@@ -440,6 +457,9 @@ func (s *Service) JoinGame(ctx context.Context, gameID, userID string) (State, e
 		}
 	}
 
+	s.mu.Lock()
+	delete(s.pendingMatches, userID)
+	s.mu.Unlock()
 	session.SetConnected(userID, true)
 	return session.Snapshot(), nil
 }
