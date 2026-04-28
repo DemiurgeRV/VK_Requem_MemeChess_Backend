@@ -111,6 +111,18 @@ func (c *Client) handleIncomingMessage(msg IncomingMessage) {
 	case "game.move":
 		c.handleGameMove(msg)
 
+	case "game.resign":
+		c.handleGameResign(msg)
+
+	case "game.draw.offer":
+		c.handleGameDrawOffer(msg)
+
+	case "game.draw.accept":
+		c.handleGameDrawAccept(msg)
+
+	case "game.draw.decline":
+		c.handleGameDrawDecline(msg)
+
 	case "game.emote":
 		c.handleGameEmote(msg)
 
@@ -120,6 +132,184 @@ func (c *Client) handleIncomingMessage(msg IncomingMessage) {
 	default:
 		c.sendError(msg.RequestID, "UNKNOWN_TYPE", "unknown message type")
 	}
+}
+
+func (c *Client) handleGameResign(msg IncomingMessage) {
+	var payload GameResignPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "invalid resign payload")
+		return
+	}
+	if strings.TrimSpace(payload.GameID) == "" {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "game_id is required")
+		return
+	}
+	if _, ok := c.gameIDs[payload.GameID]; !ok {
+		c.sendError(msg.RequestID, "GAME_NOT_JOINED", "join the game room before resigning")
+		return
+	}
+
+	state, err := c.gameService.Resign(context.Background(), payload.GameID, c.userID)
+	if err != nil {
+		c.sendGameError(msg.RequestID, err)
+		return
+	}
+
+	c.sendJSON(OutgoingMessage{
+		Type:      "game.resign.accepted",
+		RequestID: msg.RequestID,
+		Payload: map[string]string{
+			"game_id": payload.GameID,
+		},
+	})
+
+	c.broadcastJSON(payload.GameID, OutgoingMessage{
+		Type:    "game.state",
+		Payload: state,
+	})
+
+	c.broadcastJSON(payload.GameID, OutgoingMessage{
+		Type: "game.finished",
+		Payload: map[string]string{
+			"game_id":         payload.GameID,
+			"winner_id":       state.WinnerID,
+			"finished_reason": state.FinishedReason,
+		},
+	})
+}
+
+func (c *Client) handleGameDrawOffer(msg IncomingMessage) {
+	var payload GameDrawPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "invalid draw offer payload")
+		return
+	}
+	payload.GameID = strings.TrimSpace(payload.GameID)
+	if payload.GameID == "" {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "game_id is required")
+		return
+	}
+	if _, ok := c.gameIDs[payload.GameID]; !ok {
+		c.sendError(msg.RequestID, "GAME_NOT_JOINED", "join the game room before offering a draw")
+		return
+	}
+
+	state, err := c.gameService.OfferDraw(context.Background(), payload.GameID, c.userID)
+	if err != nil {
+		c.sendGameError(msg.RequestID, err)
+		return
+	}
+
+	c.sendJSON(OutgoingMessage{
+		Type:      "game.draw.offer.accepted",
+		RequestID: msg.RequestID,
+		Payload: map[string]string{
+			"game_id": payload.GameID,
+		},
+	})
+
+	c.broadcastJSON(payload.GameID, OutgoingMessage{
+		Type:    "game.state",
+		Payload: state,
+	})
+
+	c.broadcastJSON(payload.GameID, OutgoingMessage{
+		Type: "game.event.draw_offered",
+		Payload: map[string]string{
+			"game_id":       payload.GameID,
+			"by_user_id":    c.userID,
+			"offered_by_id": c.userID,
+		},
+	})
+}
+
+func (c *Client) handleGameDrawDecline(msg IncomingMessage) {
+	var payload GameDrawPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "invalid draw decline payload")
+		return
+	}
+	payload.GameID = strings.TrimSpace(payload.GameID)
+	if payload.GameID == "" {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "game_id is required")
+		return
+	}
+	if _, ok := c.gameIDs[payload.GameID]; !ok {
+		c.sendError(msg.RequestID, "GAME_NOT_JOINED", "join the game room before declining a draw")
+		return
+	}
+
+	state, err := c.gameService.DeclineDraw(context.Background(), payload.GameID, c.userID)
+	if err != nil {
+		c.sendGameError(msg.RequestID, err)
+		return
+	}
+
+	c.sendJSON(OutgoingMessage{
+		Type:      "game.draw.decline.accepted",
+		RequestID: msg.RequestID,
+		Payload: map[string]string{
+			"game_id": payload.GameID,
+		},
+	})
+
+	c.broadcastJSON(payload.GameID, OutgoingMessage{
+		Type:    "game.state",
+		Payload: state,
+	})
+
+	c.broadcastJSON(payload.GameID, OutgoingMessage{
+		Type: "game.event.draw_declined",
+		Payload: map[string]string{
+			"game_id":    payload.GameID,
+			"by_user_id": c.userID,
+		},
+	})
+}
+
+func (c *Client) handleGameDrawAccept(msg IncomingMessage) {
+	var payload GameDrawPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "invalid draw accept payload")
+		return
+	}
+	payload.GameID = strings.TrimSpace(payload.GameID)
+	if payload.GameID == "" {
+		c.sendError(msg.RequestID, "BAD_REQUEST", "game_id is required")
+		return
+	}
+	if _, ok := c.gameIDs[payload.GameID]; !ok {
+		c.sendError(msg.RequestID, "GAME_NOT_JOINED", "join the game room before accepting a draw")
+		return
+	}
+
+	state, err := c.gameService.AcceptDraw(context.Background(), payload.GameID, c.userID)
+	if err != nil {
+		c.sendGameError(msg.RequestID, err)
+		return
+	}
+
+	c.sendJSON(OutgoingMessage{
+		Type:      "game.draw.accept.accepted",
+		RequestID: msg.RequestID,
+		Payload: map[string]string{
+			"game_id": payload.GameID,
+		},
+	})
+
+	c.broadcastJSON(payload.GameID, OutgoingMessage{
+		Type:    "game.state",
+		Payload: state,
+	})
+
+	c.broadcastJSON(payload.GameID, OutgoingMessage{
+		Type: "game.finished",
+		Payload: map[string]string{
+			"game_id":         payload.GameID,
+			"winner_id":       state.WinnerID,
+			"finished_reason": state.FinishedReason,
+		},
+	})
 }
 
 func (c *Client) handleJoinGame(msg IncomingMessage) {

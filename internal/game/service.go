@@ -37,6 +37,9 @@ type State struct {
 	Player2Connected    bool   `json:"player2_connected"`
 	Status              string `json:"status"`
 	CurrentTurnUserID   string `json:"current_turn_user_id"`
+	BetAmount           int64  `json:"bet_amount,omitempty"`
+	DrawOfferedBy       string `json:"draw_offered_by,omitempty"`
+	DrawOfferedAt       time.Time `json:"draw_offered_at,omitempty"`
 	FEN                 string `json:"fen"`
 	LastMove            string `json:"last_move"`
 	WinnerID            string `json:"winner_id,omitempty"`
@@ -120,7 +123,7 @@ func (s *Service) CreateGame(ctx context.Context, gameID, player1ID, player2ID s
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	session := NewSession(gameID, player1ID, player2ID, engine)
+	session := NewSession(gameID, player1ID, player2ID, 0, engine)
 	s.trackSessionVariantLocked(session)
 	s.sessions[gameID] = session
 
@@ -163,7 +166,7 @@ func (s *Service) CreateInviteGame(ctx context.Context, hostUserID string, engin
 		return "", errors.New("game id collision")
 	}
 
-	session := NewSession(id, hostUserID, "", engine)
+	session := NewSession(id, hostUserID, "", 0, engine)
 	session.InviteExpiresAt = time.Now().Add(defaultInviteTTL)
 	s.trackSessionVariantLocked(session)
 	s.sessions[id] = session
@@ -338,7 +341,7 @@ func (s *Service) createMatchedGame(ctx context.Context, player1ID, player2ID st
 		return "", errors.New("game id collision")
 	}
 
-	session := NewSession(id, player1ID, player2ID, engine)
+	session := NewSession(id, player1ID, player2ID, stake, engine)
 	s.trackSessionVariantLocked(session)
 	s.sessions[id] = session
 
@@ -527,11 +530,16 @@ func (s *Service) MakeMove(ctx context.Context, gameID, userID, move string) (St
 
 		var winnerID *string
 		var finishedAt *time.Time
+		var finishedReason *string
 
 		if state.WinnerID != "" {
 			winnerID = &state.WinnerID
 			now := time.Now()
 			finishedAt = &now
+		}
+		if strings.TrimSpace(state.FinishedReason) != "" {
+			r := state.FinishedReason
+			finishedReason = &r
 		}
 
 		if err := s.repository.UpdateGameState(ctx, UpdateGameStateParams{
@@ -541,9 +549,14 @@ func (s *Service) MakeMove(ctx context.Context, gameID, userID, move string) (St
 			CurrentTurnUserID: state.CurrentTurnUserID,
 			WinnerID:          winnerID,
 			FinishedAt:        finishedAt,
+			FinishedReason:    finishedReason,
 		}); err != nil {
 			return State{}, MoveResult{}, err
 		}
+	}
+
+	if err := s.settlePayoutIfNeeded(ctx, session, state); err != nil {
+		return State{}, MoveResult{}, err
 	}
 
 	if s.moveAnalyzer != nil {
@@ -556,4 +569,174 @@ func (s *Service) MakeMove(ctx context.Context, gameID, userID, move string) (St
 func (s *Service) trackSessionVariantLocked(session *Session) {
 	cursor := s.variantTracker.TrackGame(session.GameID, session.FEN)
 	session.SetVariantCursor(cursor.RootPositionHash, cursor.CurrentPositionHash, cursor.Ply)
+}
+
+func (s *Service) Resign(ctx context.Context, gameID, userID string) (State, error) {
+	session, ok := s.GetSession(gameID)
+	if !ok {
+		return State{}, ErrGameNotFound
+	}
+	if !session.HasPlayer(userID) {
+		return State{}, ErrForbidden
+	}
+
+	state, err := session.Resign(userID)
+	if err != nil {
+		return State{}, err
+	}
+
+	if err := s.persistFinishedState(ctx, state); err != nil {
+		return State{}, err
+	}
+	if err := s.settlePayoutIfNeeded(ctx, session, state); err != nil {
+		return State{}, err
+	}
+	return state, nil
+}
+
+func (s *Service) OfferDraw(ctx context.Context, gameID, userID string) (State, error) {
+	session, ok := s.GetSession(gameID)
+	if !ok {
+		return State{}, ErrGameNotFound
+	}
+	if !session.HasPlayer(userID) {
+		return State{}, ErrForbidden
+	}
+
+	state, err := session.OfferDraw(userID, time.Now())
+	if err != nil {
+		return State{}, err
+	}
+
+	if err := s.persistNonTerminalState(ctx, state); err != nil {
+		return State{}, err
+	}
+	return state, nil
+}
+
+func (s *Service) DeclineDraw(ctx context.Context, gameID, userID string) (State, error) {
+	session, ok := s.GetSession(gameID)
+	if !ok {
+		return State{}, ErrGameNotFound
+	}
+	if !session.HasPlayer(userID) {
+		return State{}, ErrForbidden
+	}
+
+	state, err := session.DeclineDraw(userID)
+	if err != nil {
+		return State{}, err
+	}
+
+	if err := s.persistNonTerminalState(ctx, state); err != nil {
+		return State{}, err
+	}
+	return state, nil
+}
+
+func (s *Service) AcceptDraw(ctx context.Context, gameID, userID string) (State, error) {
+	session, ok := s.GetSession(gameID)
+	if !ok {
+		return State{}, ErrGameNotFound
+	}
+	if !session.HasPlayer(userID) {
+		return State{}, ErrForbidden
+	}
+
+	state, err := session.AcceptDraw(userID)
+	if err != nil {
+		return State{}, err
+	}
+
+	if err := s.persistFinishedState(ctx, state); err != nil {
+		return State{}, err
+	}
+	if err := s.settlePayoutIfNeeded(ctx, session, state); err != nil {
+		return State{}, err
+	}
+	return state, nil
+}
+
+func (s *Service) persistFinishedState(ctx context.Context, state State) error {
+	if s.repository == nil {
+		return nil
+	}
+
+	var winnerID *string
+	if strings.TrimSpace(state.WinnerID) != "" {
+		w := state.WinnerID
+		winnerID = &w
+	}
+
+	now := time.Now()
+	finishedAt := &now
+
+	var finishedReason *string
+	if strings.TrimSpace(state.FinishedReason) != "" {
+		r := state.FinishedReason
+		finishedReason = &r
+	}
+
+	return s.repository.UpdateGameState(ctx, UpdateGameStateParams{
+		GameID:            state.GameID,
+		Status:            state.Status,
+		FEN:               state.FEN,
+		CurrentTurnUserID: state.CurrentTurnUserID,
+		WinnerID:          winnerID,
+		FinishedAt:        finishedAt,
+		FinishedReason:    finishedReason,
+	})
+}
+
+func (s *Service) persistNonTerminalState(ctx context.Context, state State) error {
+	if s.repository == nil {
+		return nil
+	}
+
+	return s.repository.UpdateGameState(ctx, UpdateGameStateParams{
+		GameID:            state.GameID,
+		Status:            state.Status,
+		FEN:               state.FEN,
+		CurrentTurnUserID: state.CurrentTurnUserID,
+		WinnerID:          nil,
+		FinishedAt:        nil,
+		FinishedReason:    nil,
+	})
+}
+
+func (s *Service) settlePayoutIfNeeded(ctx context.Context, session *Session, state State) error {
+	if s.repository == nil || s.userRepo == nil {
+		return nil
+	}
+	if state.Status != string(StatusFinished) {
+		return nil
+	}
+	if session == nil || session.BetAmount <= 0 {
+		return nil
+	}
+
+	ok, err := s.repository.TryMarkPaidOut(ctx, state.GameID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+
+	bet := session.BetAmount
+	switch strings.TrimSpace(state.WinnerID) {
+	case "":
+		if err := s.userRepo.AddGameCurrency(ctx, state.Player1ID, bet); err != nil {
+			return err
+		}
+		if err := s.userRepo.AddGameCurrency(ctx, state.Player2ID, bet); err != nil {
+			return err
+		}
+	default:
+		if err := s.userRepo.AddGameCurrency(ctx, state.WinnerID, bet*2); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

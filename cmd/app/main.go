@@ -111,6 +111,22 @@ func main() {
 			gameHTTP.PostAnalyzeMove(w, r, parts[0])
 			return
 		}
+		if len(parts) == 2 && parts[0] != "" && parts[1] == "resign" {
+			gameHTTP.PostResign(w, r, parts[0])
+			return
+		}
+		if len(parts) == 3 && parts[0] != "" && parts[1] == "draw" && parts[2] == "offer" {
+			gameHTTP.PostDrawOffer(w, r, parts[0])
+			return
+		}
+		if len(parts) == 3 && parts[0] != "" && parts[1] == "draw" && parts[2] == "accept" {
+			gameHTTP.PostDrawAccept(w, r, parts[0])
+			return
+		}
+		if len(parts) == 3 && parts[0] != "" && parts[1] == "draw" && parts[2] == "decline" {
+			gameHTTP.PostDrawDecline(w, r, parts[0])
+			return
+		}
 		http.NotFound(w, r)
 	})
 	http.HandleFunc("/api/v1/invites/", func(w http.ResponseWriter, r *http.Request) {

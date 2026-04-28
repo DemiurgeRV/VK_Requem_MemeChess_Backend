@@ -38,6 +38,8 @@ type Session struct {
 
 	CurrentTurnUserID string `json:"current_turn_user_id"`
 
+	BetAmount int64 `json:"bet_amount,omitempty"`
+
 	FEN                 string `json:"fen"`
 	LastMove            string `json:"last_move"`
 	WinnerID            string `json:"winner_id,omitempty"`
@@ -47,18 +49,22 @@ type Session struct {
 	VariantPly          int    `json:"variant_ply"`
 	InviteExpiresAt     time.Time
 
+	DrawOfferedBy string    `json:"draw_offered_by,omitempty"`
+	DrawOfferedAt time.Time `json:"draw_offered_at,omitempty"`
+
 	Moves []Move `json:"moves"`
 
 	engine Engine
 }
 
-func NewSession(gameID, player1ID, player2ID string, engine Engine) *Session {
+func NewSession(gameID, player1ID, player2ID string, betAmount int64, engine Engine) *Session {
 	return &Session{
 		GameID:            gameID,
 		Player1ID:         player1ID,
 		Player2ID:         player2ID,
 		Status:            StatusWaiting,
 		CurrentTurnUserID: player1ID,
+		BetAmount:         betAmount,
 		FEN:               engine.CurrentFEN(),
 		Moves:             make([]Move, 0, 128),
 		engine:            engine,
@@ -166,6 +172,9 @@ func (s *Session) Snapshot() State {
 		Player2Connected:    s.Player2Connected,
 		Status:              string(s.Status),
 		CurrentTurnUserID:   s.CurrentTurnUserID,
+		BetAmount:           s.BetAmount,
+		DrawOfferedBy:       s.DrawOfferedBy,
+		DrawOfferedAt:       s.DrawOfferedAt,
 		FEN:                 s.FEN,
 		LastMove:            s.LastMove,
 		WinnerID:            s.WinnerID,
@@ -218,6 +227,8 @@ func (s *Session) ApplyMove(userID, move string) (State, MoveResult, error) {
 	s.Moves = append(s.Moves, nextMove)
 	s.FEN = result.FEN
 	s.LastMove = result.Move
+	s.DrawOfferedBy = ""
+	s.DrawOfferedAt = time.Time{}
 
 	if result.IsCheckmate {
 		s.Status = StatusFinished
@@ -242,6 +253,9 @@ func (s *Session) ApplyMove(userID, move string) (State, MoveResult, error) {
 		Player2Connected:    s.Player2Connected,
 		Status:              string(s.Status),
 		CurrentTurnUserID:   s.CurrentTurnUserID,
+		BetAmount:           s.BetAmount,
+		DrawOfferedBy:       s.DrawOfferedBy,
+		DrawOfferedAt:       s.DrawOfferedAt,
 		FEN:                 s.FEN,
 		LastMove:            s.LastMove,
 		WinnerID:            s.WinnerID,
@@ -251,4 +265,135 @@ func (s *Session) ApplyMove(userID, move string) (State, MoveResult, error) {
 		VariantPly:          s.VariantPly,
 		Moves:               moves,
 	}, result, nil
+}
+
+func (s *Session) Resign(userID string) (State, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Status == StatusFinished {
+		return State{}, ErrGameFinished
+	}
+	if s.Status != StatusActive {
+		return State{}, ErrGameNotActive
+	}
+	if userID != s.Player1ID && userID != s.Player2ID {
+		return State{}, ErrForbidden
+	}
+
+	winner := s.Player1ID
+	if userID == s.Player1ID {
+		winner = s.Player2ID
+	}
+
+	s.Status = StatusFinished
+	s.WinnerID = winner
+	s.FinishedReason = "resign"
+	s.DrawOfferedBy = ""
+	s.DrawOfferedAt = time.Time{}
+
+	return s.snapshotLocked(), nil
+}
+
+func (s *Session) OfferDraw(userID string, now time.Time) (State, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Status == StatusFinished {
+		return State{}, ErrGameFinished
+	}
+	if s.Status != StatusActive {
+		return State{}, ErrGameNotActive
+	}
+	if userID != s.Player1ID && userID != s.Player2ID {
+		return State{}, ErrForbidden
+	}
+
+	if s.DrawOfferedBy == userID {
+		return s.snapshotLocked(), nil
+	}
+
+	s.DrawOfferedBy = userID
+	s.DrawOfferedAt = now
+	return s.snapshotLocked(), nil
+}
+
+func (s *Session) DeclineDraw(userID string) (State, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Status == StatusFinished {
+		return State{}, ErrGameFinished
+	}
+	if s.Status != StatusActive {
+		return State{}, ErrGameNotActive
+	}
+	if userID != s.Player1ID && userID != s.Player2ID {
+		return State{}, ErrForbidden
+	}
+	if s.DrawOfferedBy == "" {
+		return s.snapshotLocked(), nil
+	}
+	if s.DrawOfferedBy == userID {
+		return State{}, ErrForbidden
+	}
+
+	s.DrawOfferedBy = ""
+	s.DrawOfferedAt = time.Time{}
+	return s.snapshotLocked(), nil
+}
+
+func (s *Session) AcceptDraw(userID string) (State, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Status == StatusFinished {
+		return State{}, ErrGameFinished
+	}
+	if s.Status != StatusActive {
+		return State{}, ErrGameNotActive
+	}
+	if userID != s.Player1ID && userID != s.Player2ID {
+		return State{}, ErrForbidden
+	}
+	if s.DrawOfferedBy == "" {
+		return State{}, ErrForbidden
+	}
+	if s.DrawOfferedBy == userID {
+		return State{}, ErrForbidden
+	}
+
+	s.Status = StatusFinished
+	s.WinnerID = ""
+	s.FinishedReason = "draw_agreed"
+	s.DrawOfferedBy = ""
+	s.DrawOfferedAt = time.Time{}
+
+	return s.snapshotLocked(), nil
+}
+
+func (s *Session) snapshotLocked() State {
+	moves := make([]Move, len(s.Moves))
+	copy(moves, s.Moves)
+
+	return State{
+		GameID:              s.GameID,
+		Player1ID:           s.Player1ID,
+		Player2ID:           s.Player2ID,
+		Player1Connected:    s.Player1Connected,
+		Player2Connected:    s.Player2Connected,
+		Status:              string(s.Status),
+		CurrentTurnUserID:   s.CurrentTurnUserID,
+		BetAmount:           s.BetAmount,
+		DrawOfferedBy:       s.DrawOfferedBy,
+		DrawOfferedAt:       s.DrawOfferedAt,
+		FEN:                 s.FEN,
+		LastMove:            s.LastMove,
+		WinnerID:            s.WinnerID,
+		FinishedReason:      s.FinishedReason,
+		RootPositionHash:    s.RootPositionHash,
+		CurrentPositionHash: s.CurrentPositionHash,
+		VariantPly:          s.VariantPly,
+		Moves:               moves,
+	}
 }

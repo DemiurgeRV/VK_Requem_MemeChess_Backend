@@ -29,6 +29,14 @@ type GameMovePayload struct {
 	Move   string `json:"move"`
 }
 
+type GameResignPayload struct {
+	GameID string `json:"game_id"`
+}
+
+type GameDrawPayload struct {
+	GameID string `json:"game_id"`
+}
+
 type GameEmotePayload struct {
 	GameID   string `json:"game_id"`
 	EmoteMP4 string `json:"emote_mp4"`

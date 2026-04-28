@@ -76,6 +76,134 @@ type matchSearchRequest struct {
 	MaxStake int64  `json:"max_stake"`
 }
 
+func (h *HTTP) PostResign(w http.ResponseWriter, r *http.Request, gameID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	participant, err := h.AuthService.UserFromBearer(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+
+	state, err := h.Svc.Resign(r.Context(), gameID, participant.ID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrGameNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "game not found"})
+		case errors.Is(err, ErrForbidden):
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "not a participant"})
+		case errors.Is(err, ErrGameFinished):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "game already finished"})
+		case errors.Is(err, ErrGameNotActive):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "game is not active"})
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, state)
+}
+
+func (h *HTTP) PostDrawOffer(w http.ResponseWriter, r *http.Request, gameID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	participant, err := h.AuthService.UserFromBearer(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+
+	state, err := h.Svc.OfferDraw(r.Context(), gameID, participant.ID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrGameNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "game not found"})
+		case errors.Is(err, ErrForbidden):
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "not a participant"})
+		case errors.Is(err, ErrGameFinished):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "game already finished"})
+		case errors.Is(err, ErrGameNotActive):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "game is not active"})
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, state)
+}
+
+func (h *HTTP) PostDrawAccept(w http.ResponseWriter, r *http.Request, gameID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	participant, err := h.AuthService.UserFromBearer(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+
+	state, err := h.Svc.AcceptDraw(r.Context(), gameID, participant.ID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrGameNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "game not found"})
+		case errors.Is(err, ErrForbidden):
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "draw offer required"})
+		case errors.Is(err, ErrGameFinished):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "game already finished"})
+		case errors.Is(err, ErrGameNotActive):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "game is not active"})
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, state)
+}
+
+func (h *HTTP) PostDrawDecline(w http.ResponseWriter, r *http.Request, gameID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	participant, err := h.AuthService.UserFromBearer(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+
+	state, err := h.Svc.DeclineDraw(r.Context(), gameID, participant.ID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrGameNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "game not found"})
+		case errors.Is(err, ErrForbidden):
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		case errors.Is(err, ErrGameFinished):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "game already finished"})
+		case errors.Is(err, ErrGameNotActive):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "game is not active"})
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, state)
+}
+
 // PostInvite creates a new room; host shares JoinBase/invite/{invite_token} with the opponent.
 func (h *HTTP) PostInvite(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

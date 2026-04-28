@@ -127,6 +127,7 @@ type UpdateGameStateParams struct {
 	CurrentTurnUserID string
 	WinnerID          *string
 	FinishedAt        *time.Time
+	FinishedReason    *string
 }
 
 func (r *Repository) UpdateGameState(ctx context.Context, p UpdateGameStateParams) error {
@@ -140,7 +141,8 @@ func (r *Repository) UpdateGameState(ctx context.Context, p UpdateGameStateParam
 			fen = $3,
 			current_turn_user_id = $4,
 			winner_id = $5,
-			finished_at = $6
+			finished_at = $6,
+			finished_reason = $7
 		WHERE id = $1
 	`
 
@@ -151,10 +153,28 @@ func (r *Repository) UpdateGameState(ctx context.Context, p UpdateGameStateParam
 		p.CurrentTurnUserID,
 		p.WinnerID,
 		p.FinishedAt,
+		p.FinishedReason,
 	)
 	if err != nil {
 		return fmt.Errorf("update game state: %w", err)
 	}
 
 	return nil
+}
+
+func (r *Repository) TryMarkPaidOut(ctx context.Context, gameID string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	const q = `
+		UPDATE games
+		SET paid_out = true
+		WHERE id = $1 AND paid_out = false
+	`
+
+	tag, err := r.pool.Exec(ctx, q, gameID)
+	if err != nil {
+		return false, fmt.Errorf("mark paid_out: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
 }
